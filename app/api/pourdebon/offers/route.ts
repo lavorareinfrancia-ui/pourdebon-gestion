@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "Shop-API-Key": apiKey,
+        Authorization: apiKey,
         Accept: "application/json"
       },
       cache: "no-store"
