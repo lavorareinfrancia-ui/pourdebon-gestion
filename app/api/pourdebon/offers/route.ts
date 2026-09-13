@@ -5,6 +5,9 @@ export const dynamic = "force-dynamic";
 type MiraklOffer = {
   shop_sku?: string;
   product_sku?: string;
+  product_title?: string;
+  product_brand?: string;
+  product_description?: string;
   price?: number;
   quantity?: number;
   state_code?: string;
@@ -87,6 +90,9 @@ export async function GET(request: NextRequest) {
       offers: offers.map((offer) => ({
         shop_sku: offer.shop_sku ?? null,
         product_sku: offer.product_sku ?? null,
+        product_title: offer.product_title ?? null,
+        product_brand: offer.product_brand ?? null,
+        product_description: offer.product_description ?? null,
         price: offer.price ?? null,
         quantity: offer.quantity ?? null,
         state_code: offer.state_code ?? null
