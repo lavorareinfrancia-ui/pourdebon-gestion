@@ -11,8 +11,10 @@ Backend Next.js dédié à Pasta Piemonte pour intégrer l'API vendeur Pourdebon
 
 ## Variables d'environnement
 
+Configurées dans Vercel pour l'environnement Production :
+
 - `POURDEBON_API_KEY`
-- `POURDEBON_BASE_URL` (par défaut `https://vendeur.pourdebon.com`)
+- `POURDEBON_BASE_URL`
 
 ## Endpoint interne
 
