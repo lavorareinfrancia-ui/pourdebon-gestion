@@ -57,7 +57,7 @@ export default function Home() {
     if (!q) return offers;
 
     return offers.filter((offer) =>
-      [offer.shop_sku, offer.product_sku, offer.state_code]
+      [offer.shop_sku, offer.state_code]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q))
     );
@@ -108,8 +108,7 @@ export default function Home() {
             <table style={styles.table}>
               <thead>
                 <tr>
-                  <th style={styles.th}>SKU boutique</th>
-                  <th style={styles.th}>SKU produit</th>
+                  <th style={styles.th}>SKU</th>
                   <th style={{ ...styles.th, textAlign: "right" }}>Prix</th>
                   <th style={{ ...styles.th, textAlign: "right" }}>Stock</th>
                   <th style={styles.th}>État</th>
@@ -118,17 +117,16 @@ export default function Home() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={5} style={styles.empty}>Chargement des offres…</td>
+                    <td colSpan={4} style={styles.empty}>Chargement des offres…</td>
                   </tr>
                 ) : filteredOffers.length === 0 ? (
                   <tr>
-                    <td colSpan={5} style={styles.empty}>Aucun produit trouvé.</td>
+                    <td colSpan={4} style={styles.empty}>Aucun produit trouvé.</td>
                   </tr>
                 ) : (
                   filteredOffers.map((offer, index) => (
-                    <tr key={`${offer.shop_sku ?? "offer"}-${index}`}>
+                    <tr key={`${offer.shop_sku ?? offer.product_sku ?? "offer"}-${index}`}>
                       <td style={styles.td}><strong>{offer.shop_sku ?? "—"}</strong></td>
-                      <td style={styles.td}>{offer.product_sku ?? "—"}</td>
                       <td style={{ ...styles.td, textAlign: "right" }}>
                         {offer.price == null ? "—" : `${Number(offer.price).toFixed(2)} €`}
                       </td>
@@ -242,7 +240,7 @@ const styles: Record<string, React.CSSProperties> = {
   table: {
     width: "100%",
     borderCollapse: "collapse",
-    minWidth: 720,
+    minWidth: 560,
   },
   th: {
     textAlign: "left",
