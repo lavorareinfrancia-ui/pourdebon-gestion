@@ -17,52 +17,27 @@ type OffersResponse = {
   error?: string;
 };
 
+type ProductCatalogResponse = {
+  products?: Array<{
+    ids?: string[];
+    title?: string | null;
+  }>;
+  error?: string;
+};
+
 type ProductNameMap = Record<string, string>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
-}
-
-function buildProductNameMap(payload: unknown): ProductNameMap {
+function buildProductNameMap(payload: ProductCatalogResponse): ProductNameMap {
   const map: ProductNameMap = {};
-  const candidates: unknown[] = [];
+  const products = Array.isArray(payload.products) ? payload.products : [];
 
-  if (Array.isArray(payload)) {
-    candidates.push(...payload);
-  } else if (isRecord(payload)) {
-    for (const key of ["products", "data", "items", "content"]) {
-      const value = payload[key];
-      if (Array.isArray(value)) candidates.push(...value);
+  for (const product of products) {
+    if (!product?.title || !Array.isArray(product.ids)) continue;
+    for (const id of product.ids) {
+      if (typeof id === "string" && id.trim()) {
+        map[id.trim()] = product.title;
+      }
     }
-  }
-
-  for (const item of candidates) {
-    if (!isRecord(item)) continue;
-
-    const name = firstString(item, [
-      "title",
-      "name",
-      "label",
-      "product_title",
-      "product_name",
-      "description",
-    ]);
-
-    if (!name) continue;
-
-    const ids = [
-      firstString(item, ["product_sku", "sku", "shop_sku", "id", "product_id"]),
-    ].filter(Boolean) as string[];
-
-    for (const id of ids) map[id] = name;
   }
 
   return map;
@@ -87,7 +62,7 @@ export default function Home() {
       ]);
 
       const offersData = (await offersResponse.json()) as OffersResponse;
-      const productsData = await productsResponse.json();
+      const productsData = (await productsResponse.json()) as ProductCatalogResponse;
 
       if (!offersResponse.ok) {
         throw new Error(offersData.error || "Impossible de charger les offres");
@@ -198,17 +173,13 @@ export default function Home() {
                     const name = productName(offer);
                     return (
                       <tr key={`${offer.shop_sku ?? offer.product_sku ?? "offer"}-${index}`}>
-                        <td style={styles.td}>
-                          <strong>{name}</strong>
-                        </td>
+                        <td style={styles.td}><strong>{name}</strong></td>
                         <td style={styles.td}>{offer.shop_sku ?? "—"}</td>
                         <td style={{ ...styles.td, textAlign: "right" }}>
                           {offer.price == null ? "—" : `${Number(offer.price).toFixed(2)} €`}
                         </td>
                         <td style={{ ...styles.td, textAlign: "right" }}>{offer.quantity ?? "—"}</td>
-                        <td style={styles.td}>
-                          <span style={styles.badge}>{offer.state_code ?? "—"}</span>
-                        </td>
+                        <td style={styles.td}><span style={styles.badge}>{offer.state_code ?? "—"}</span></td>
                       </tr>
                     );
                   })
@@ -223,136 +194,24 @@ export default function Home() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    background: "#f6f3ee",
-    color: "#26231f",
-    fontFamily: "Arial, Helvetica, sans-serif",
-    padding: "40px 24px 72px",
-  },
-  header: {
-    maxWidth: 1180,
-    margin: "0 auto 24px",
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 24,
-    alignItems: "flex-end",
-    flexWrap: "wrap",
-  },
-  eyebrow: {
-    margin: "0 0 8px",
-    fontSize: 13,
-    fontWeight: 700,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: "#7a6654",
-  },
-  title: {
-    margin: 0,
-    fontSize: "clamp(32px, 5vw, 48px)",
-    lineHeight: 1.05,
-  },
-  subtitle: {
-    margin: "12px 0 0",
-    maxWidth: 720,
-    color: "#6e675f",
-    lineHeight: 1.5,
-  },
-  button: {
-    border: 0,
-    borderRadius: 10,
-    background: "#26231f",
-    color: "white",
-    padding: "12px 18px",
-    fontWeight: 700,
-    cursor: "pointer",
-  },
-  stats: {
-    maxWidth: 1180,
-    margin: "0 auto 18px",
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: 12,
-  },
-  card: {
-    background: "white",
-    border: "1px solid #e5dfd7",
-    borderRadius: 14,
-    padding: 18,
-  },
-  cardLabel: {
-    display: "block",
-    fontSize: 13,
-    color: "#7b746c",
-    marginBottom: 6,
-  },
-  cardValue: {
-    display: "block",
-    fontSize: 28,
-  },
-  panel: {
-    maxWidth: 1180,
-    margin: "0 auto",
-    background: "white",
-    border: "1px solid #e5dfd7",
-    borderRadius: 16,
-    overflow: "hidden",
-  },
-  toolbar: {
-    padding: 16,
-    borderBottom: "1px solid #ece7e1",
-  },
-  input: {
-    width: "min(420px, 100%)",
-    border: "1px solid #d8d1c8",
-    borderRadius: 10,
-    padding: "11px 13px",
-    fontSize: 15,
-    outline: "none",
-  },
-  tableWrap: {
-    overflowX: "auto",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    minWidth: 760,
-  },
-  th: {
-    textAlign: "left",
-    padding: "13px 16px",
-    fontSize: 12,
-    textTransform: "uppercase",
-    letterSpacing: "0.05em",
-    color: "#7b746c",
-    background: "#faf8f5",
-    borderBottom: "1px solid #ece7e1",
-  },
-  td: {
-    padding: "14px 16px",
-    borderBottom: "1px solid #f0ece7",
-    fontSize: 14,
-    verticalAlign: "middle",
-  },
-  badge: {
-    display: "inline-block",
-    padding: "5px 8px",
-    borderRadius: 999,
-    background: "#f1eee9",
-    fontSize: 12,
-    fontWeight: 700,
-  },
-  empty: {
-    padding: 32,
-    textAlign: "center",
-    color: "#7b746c",
-  },
-  error: {
-    margin: 16,
-    padding: 14,
-    borderRadius: 10,
-    background: "#fff2f0",
-    color: "#a33a2b",
-    border: "1px solid #f0c8c1",
-  },
+  page: { minHeight: "100vh", background: "#f6f3ee", color: "#26231f", fontFamily: "Arial, Helvetica, sans-serif", padding: "40px 24px 72px" },
+  header: { maxWidth: 1180, margin: "0 auto 24px", display: "flex", justifyContent: "space-between", gap: 24, alignItems: "flex-end", flexWrap: "wrap" },
+  eyebrow: { margin: "0 0 8px", fontSize: 13, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#7a6654" },
+  title: { margin: 0, fontSize: "clamp(32px, 5vw, 48px)", lineHeight: 1.05 },
+  subtitle: { margin: "12px 0 0", maxWidth: 720, color: "#6e675f", lineHeight: 1.5 },
+  button: { border: 0, borderRadius: 10, background: "#26231f", color: "white", padding: "12px 18px", fontWeight: 700, cursor: "pointer" },
+  stats: { maxWidth: 1180, margin: "0 auto 18px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 },
+  card: { background: "white", border: "1px solid #e5dfd7", borderRadius: 14, padding: 18 },
+  cardLabel: { display: "block", fontSize: 13, color: "#7b746c", marginBottom: 6 },
+  cardValue: { display: "block", fontSize: 28 },
+  panel: { maxWidth: 1180, margin: "0 auto", background: "white", border: "1px solid #e5dfd7", borderRadius: 16, overflow: "hidden" },
+  toolbar: { padding: 16, borderBottom: "1px solid #ece7e1" },
+  input: { width: "min(420px, 100%)", border: "1px solid #d8d1c8", borderRadius: 10, padding: "11px 13px", fontSize: 15, outline: "none" },
+  tableWrap: { overflowX: "auto" },
+  table: { width: "100%", borderCollapse: "collapse", minWidth: 760 },
+  th: { textAlign: "left", padding: "13px 16px", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "#7b746c", background: "#faf8f5", borderBottom: "1px solid #ece7e1" },
+  td: { padding: "14px 16px", borderBottom: "1px solid #f0ece7", fontSize: 14, verticalAlign: "middle" },
+  badge: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#f1eee9", fontSize: 12, fontWeight: 700 },
+  empty: { padding: 32, textAlign: "center", color: "#7b746c" },
+  error: { margin: 16, padding: 14, borderRadius: 10, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1" },
 };
