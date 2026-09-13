@@ -17,8 +17,60 @@ type OffersResponse = {
   error?: string;
 };
 
+type ProductNameMap = Record<string, string>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function firstString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function buildProductNameMap(payload: unknown): ProductNameMap {
+  const map: ProductNameMap = {};
+  const candidates: unknown[] = [];
+
+  if (Array.isArray(payload)) {
+    candidates.push(...payload);
+  } else if (isRecord(payload)) {
+    for (const key of ["products", "data", "items", "content"]) {
+      const value = payload[key];
+      if (Array.isArray(value)) candidates.push(...value);
+    }
+  }
+
+  for (const item of candidates) {
+    if (!isRecord(item)) continue;
+
+    const name = firstString(item, [
+      "title",
+      "name",
+      "label",
+      "product_title",
+      "product_name",
+      "description",
+    ]);
+
+    if (!name) continue;
+
+    const ids = [
+      firstString(item, ["product_sku", "sku", "shop_sku", "id", "product_id"]),
+    ].filter(Boolean) as string[];
+
+    for (const id of ids) map[id] = name;
+  }
+
+  return map;
+}
+
 export default function Home() {
   const [offers, setOffers] = useState<Offer[]>([]);
+  const [productNames, setProductNames] = useState<ProductNameMap>({});
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -29,18 +81,27 @@ export default function Home() {
     setError("");
 
     try {
-      const response = await fetch("/api/pourdebon/offers?max=100&offset=0", {
-        cache: "no-store",
-      });
-      const data = (await response.json()) as OffersResponse;
+      const [offersResponse, productsResponse] = await Promise.all([
+        fetch("/api/pourdebon/offers?max=100&offset=0", { cache: "no-store" }),
+        fetch("/api/pourdebon/products", { cache: "no-store" }),
+      ]);
 
-      if (!response.ok) {
-        throw new Error(data.error || "Impossible de charger les produits");
+      const offersData = (await offersResponse.json()) as OffersResponse;
+      const productsData = await productsResponse.json();
+
+      if (!offersResponse.ok) {
+        throw new Error(offersData.error || "Impossible de charger les offres");
       }
 
-      const rows = Array.isArray(data.offers) ? data.offers : [];
+      const rows = Array.isArray(offersData.offers) ? offersData.offers : [];
       setOffers(rows);
-      setTotal(data.total_count ?? rows.length);
+      setTotal(offersData.total_count ?? rows.length);
+
+      if (productsResponse.ok) {
+        setProductNames(buildProductNameMap(productsData));
+      } else {
+        setProductNames({});
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur inconnue");
     } finally {
@@ -52,16 +113,24 @@ export default function Home() {
     loadOffers();
   }, []);
 
+  function productName(offer: Offer) {
+    return (
+      (offer.product_sku && productNames[offer.product_sku]) ||
+      (offer.shop_sku && productNames[offer.shop_sku]) ||
+      "Nom non disponible"
+    );
+  }
+
   const filteredOffers = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return offers;
 
     return offers.filter((offer) =>
-      [offer.shop_sku, offer.state_code]
+      [offer.shop_sku, offer.state_code, productName(offer)]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q))
     );
-  }, [offers, query]);
+  }, [offers, productNames, query]);
 
   return (
     <main style={styles.page}>
@@ -96,7 +165,7 @@ export default function Home() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Rechercher par SKU ou état…"
+            placeholder="Rechercher par nom, SKU ou état…"
             style={styles.input}
           />
         </div>
@@ -108,6 +177,7 @@ export default function Home() {
             <table style={styles.table}>
               <thead>
                 <tr>
+                  <th style={styles.th}>Produit</th>
                   <th style={styles.th}>SKU</th>
                   <th style={{ ...styles.th, textAlign: "right" }}>Prix</th>
                   <th style={{ ...styles.th, textAlign: "right" }}>Stock</th>
@@ -117,25 +187,31 @@ export default function Home() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={4} style={styles.empty}>Chargement des offres…</td>
+                    <td colSpan={5} style={styles.empty}>Chargement des produits…</td>
                   </tr>
                 ) : filteredOffers.length === 0 ? (
                   <tr>
-                    <td colSpan={4} style={styles.empty}>Aucun produit trouvé.</td>
+                    <td colSpan={5} style={styles.empty}>Aucun produit trouvé.</td>
                   </tr>
                 ) : (
-                  filteredOffers.map((offer, index) => (
-                    <tr key={`${offer.shop_sku ?? offer.product_sku ?? "offer"}-${index}`}>
-                      <td style={styles.td}><strong>{offer.shop_sku ?? "—"}</strong></td>
-                      <td style={{ ...styles.td, textAlign: "right" }}>
-                        {offer.price == null ? "—" : `${Number(offer.price).toFixed(2)} €`}
-                      </td>
-                      <td style={{ ...styles.td, textAlign: "right" }}>{offer.quantity ?? "—"}</td>
-                      <td style={styles.td}>
-                        <span style={styles.badge}>{offer.state_code ?? "—"}</span>
-                      </td>
-                    </tr>
-                  ))
+                  filteredOffers.map((offer, index) => {
+                    const name = productName(offer);
+                    return (
+                      <tr key={`${offer.shop_sku ?? offer.product_sku ?? "offer"}-${index}`}>
+                        <td style={styles.td}>
+                          <strong>{name}</strong>
+                        </td>
+                        <td style={styles.td}>{offer.shop_sku ?? "—"}</td>
+                        <td style={{ ...styles.td, textAlign: "right" }}>
+                          {offer.price == null ? "—" : `${Number(offer.price).toFixed(2)} €`}
+                        </td>
+                        <td style={{ ...styles.td, textAlign: "right" }}>{offer.quantity ?? "—"}</td>
+                        <td style={styles.td}>
+                          <span style={styles.badge}>{offer.state_code ?? "—"}</span>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -240,7 +316,7 @@ const styles: Record<string, React.CSSProperties> = {
   table: {
     width: "100%",
     borderCollapse: "collapse",
-    minWidth: 560,
+    minWidth: 760,
   },
   th: {
     textAlign: "left",
