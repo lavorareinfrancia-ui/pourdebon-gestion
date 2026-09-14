@@ -52,6 +52,10 @@ function normalize(value: string | null | undefined) {
     .trim();
 }
 
+function isProName(value: string | null | undefined) {
+  return /(^|\s)pro(\s|$)/i.test(normalize(value));
+}
+
 function weightFromTitle(value: string | null | undefined) {
   const t = normalize(value);
   if (/\b1\s*kg\b/.test(t) || /\b1000\s*g\b/.test(t)) return 1;
@@ -114,8 +118,8 @@ function percent(value: number | null) {
 function matchShopProduct(offer: Offer, products: WooProduct[]) {
   const family = familyFromTitle(offer.product_title);
   const weight = weightFromTitle(offer.product_title);
-  if (!family || family === "citron") return null;
-  const candidates = products.filter((product) => familyFromTitle(product.name) === family && product.price != null);
+  if (!family || family === "citron" || isProName(offer.product_title)) return null;
+  const candidates = products.filter((product) => !isProName(product.name) && familyFromTitle(product.name) === family && product.price != null);
   const exact = candidates.find((product) => weight != null && weightFromTitle(product.name) === weight);
   if (exact) return exact;
   return candidates.length === 1 ? candidates[0] : null;
@@ -160,6 +164,7 @@ export default function Home() {
   useEffect(() => { loadData(); }, []);
 
   const rows = useMemo<AuditRow[]>(() => offers.map((offer) => {
+    if (isProName(offer.product_title)) return null;
     const info = auditInfo(offer);
     if (!info.group || info.family === "citron" || !info.weightKg) return null;
     const shopProduct = matchShopProduct(offer, shopProducts);
@@ -212,7 +217,7 @@ export default function Home() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Correction des prix frais</h1>
-          <p style={styles.subtitle}>Le Citron est exclu. On avance dans l’ordre : ravioli, pasta fraîche, gnocchi. Une seule référence est modifiée à la fois.</p>
+          <p style={styles.subtitle}>Le Citron et toutes les références PRO sont exclus. On avance dans l’ordre : ravioli, pasta fraîche, gnocchi. Une seule référence est modifiée à la fois.</p>
         </div>
         <button onClick={loadData} disabled={loading || updatingSku !== null} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
       </section>
@@ -254,7 +259,7 @@ export default function Home() {
         </section>;
       })}
 
-      <section style={styles.note}><strong>Regola:</strong> il prezzo boutique arriva dal catalogo WooCommerce live. Il target considera la commissione HT osservata, l’IVA sulla commissione recuperabile e viene arrotondato sempre all’euro superiore. I prodotti assenti da WooCommerce sono semplicemente ignorati.</section>
+      <section style={styles.note}><strong>Regola:</strong> il prezzo boutique arriva dal catalogo WooCommerce live. Il target considera la commissione HT osservata, l’IVA sulla commissione recuperabile e viene arrotondato sempre all’euro superiore. I prodotti Citron, PRO e quelli assenti da WooCommerce sono ignorati in questa fase.</section>
     </main>
   );
 }
