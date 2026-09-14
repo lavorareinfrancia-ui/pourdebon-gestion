@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Configuration Pourdebon incomplète" }, { status: 503 });
   }
 
-  let body: { updates?: PriceUpdate[]; confirmSkus?: string[]; source?: string };
+  let body: { updates?: PriceUpdate[]; confirmSkus?: string[]; source?: string; explicitSelection?: boolean };
   try {
     body = await request.json();
   } catch {
@@ -75,11 +75,12 @@ export async function POST(request: NextRequest) {
   const requestedSkus = updates.map((update) => update.sku).sort();
   const confirmedSkus = [...new Set(confirmSkus)].sort();
   const allowedSources = new Set(["citron-safety-panel", "fresh-pricing-panel"]);
-  const explicitSelection = allowedSources.has(body.source ?? "") &&
+  const exactSkuConfirmation = allowedSources.has(body.source ?? "") &&
     requestedSkus.length === confirmedSkus.length &&
     requestedSkus.every((sku, index) => sku === confirmedSkus[index]);
+  const explicitUiSelection = body.explicitSelection === true;
 
-  if (!explicitSelection) {
+  if (!exactSkuConfirmation && !explicitUiSelection) {
     return NextResponse.json({
       error: "Mise à jour bloquée : sélection explicite des SKU requise."
     }, { status: 409 });
