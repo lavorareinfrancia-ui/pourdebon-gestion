@@ -36,15 +36,7 @@ function hasActivePromotion(offer: MiraklOffer) {
     const discountPrice = Number(discount.price ?? 0);
     const start = asDate(discount.start_date ?? discount.startDate);
     const end = asDate(discount.end_date ?? discount.endDate);
-
-    if (
-      discountPrice > 0 &&
-      regularPrice > 0 &&
-      discountPrice < regularPrice &&
-      isWithinActiveWindow(start, end)
-    ) {
-      return true;
-    }
+    if (discountPrice > 0 && regularPrice > 0 && discountPrice < regularPrice && isWithinActiveWindow(start, end)) return true;
   }
 
   const pricing = offer.applicable_pricing;
@@ -53,15 +45,7 @@ function hasActivePromotion(offer: MiraklOffer) {
     const discounted = Number(pricing.unit_discount_price ?? 0);
     const start = asDate(pricing.discount_start_date ?? pricing.start_date);
     const end = asDate(pricing.discount_end_date ?? pricing.end_date);
-
-    if (
-      discounted > 0 &&
-      origin > 0 &&
-      discounted < origin &&
-      isWithinActiveWindow(start, end)
-    ) {
-      return true;
-    }
+    if (discounted > 0 && origin > 0 && discounted < origin && isWithinActiveWindow(start, end)) return true;
   }
 
   return false;
@@ -90,13 +74,14 @@ export async function POST(request: NextRequest) {
   const confirmSkus = Array.isArray(body.confirmSkus) ? body.confirmSkus : [];
   const requestedSkus = updates.map((update) => update.sku).sort();
   const confirmedSkus = [...new Set(confirmSkus)].sort();
-  const explicitSelection = body.source === "citron-safety-panel" &&
+  const allowedSources = new Set(["citron-safety-panel", "fresh-pricing-panel"]);
+  const explicitSelection = allowedSources.has(body.source ?? "") &&
     requestedSkus.length === confirmedSkus.length &&
     requestedSkus.every((sku, index) => sku === confirmedSkus[index]);
 
   if (!explicitSelection) {
     return NextResponse.json({
-      error: "Mise à jour bloquée : sélection explicite des SKU requise. Utilisez le panneau Sécurité prix Citron."
+      error: "Mise à jour bloquée : sélection explicite des SKU requise."
     }, { status: 409 });
   }
 
