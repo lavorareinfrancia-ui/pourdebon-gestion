@@ -130,7 +130,7 @@ function percent(value: number | null) {
 }
 
 function wooText(product: WooProduct) {
-  return normalize(`${product.name ?? ""} ${product.parent_name ?? ""} ${product.variation ?? ""} ${(product.categories ?? []).join(" ")}`);
+  return normalize(`${product.name ?? ""} ${product.parent_name ?? ""} ${product.variation ?? ""} ${product.sku ?? ""} ${(product.categories ?? []).join(" ")}`);
 }
 
 function isFreshWooProduct(product: WooProduct) {
@@ -145,7 +145,7 @@ function matchShopProduct(offer: Offer, products: WooProduct[]) {
   if (!family || family === "citron" || !weight || isProName(offer.product_title)) return null;
 
   let candidates = products.filter((product) => {
-    if (isProName(product.name) || product.price == null) return false;
+    if (isProName(product.name) || isProName(product.sku) || product.price == null) return false;
     return familyFromTitle(wooText(product)) === family;
   });
 
@@ -153,10 +153,12 @@ function matchShopProduct(offer: Offer, products: WooProduct[]) {
   if (fresh.length) candidates = fresh;
 
   const exactWeight = candidates.filter((product) => weightFromTitle(wooText(product)) === weight);
-  if (exactWeight.length === 1) return exactWeight[0];
-
   const exactVariations = exactWeight.filter((product) => product.is_variation === true);
   if (exactVariations.length === 1) return exactVariations[0];
+  if (exactWeight.length === 1) return exactWeight[0];
+
+  const skuWeighted = exactWeight.filter((product) => weightFromTitle(product.sku) === weight);
+  if (skuWeighted.length === 1) return skuWeighted[0];
 
   return null;
 }
@@ -290,7 +292,7 @@ export default function Home() {
               const changed = row.differenceTtc != null && Math.abs(row.differenceTtc) > 0.001;
               const canApply = Boolean(sku && row.shopProduct && row.info.commissionHtRate != null && row.targetTtc != null && changed);
               const sourceLabel = row.shopProduct
-                ? `${row.shopProduct.parent_name ?? row.shopProduct.name ?? "WooCommerce"}${row.shopProduct.variation ? ` · ${row.shopProduct.variation}` : ""}`
+                ? `${row.shopProduct.parent_name ?? row.shopProduct.name ?? "WooCommerce"}${row.shopProduct.variation ? ` · ${row.shopProduct.variation}` : ""}${row.shopProduct.sku ? ` · SKU ${row.shopProduct.sku}` : ""}`
                 : "Correspondance WooCommerce à résoudre";
 
               return <article key={`${sku ?? row.offer.product_sku ?? "offer"}-${index}`} style={styles.card}>
