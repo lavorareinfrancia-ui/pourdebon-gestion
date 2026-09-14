@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Configuration Pourdebon incomplète" }, { status: 503 });
   }
 
-  let body: { updates?: PriceUpdate[] };
+  let body: { updates?: PriceUpdate[]; confirmSkus?: string[]; source?: string };
   try {
     body = await request.json();
   } catch {
@@ -85,6 +85,19 @@ export async function POST(request: NextRequest) {
   const updates = Array.isArray(body.updates) ? body.updates : [];
   if (updates.length === 0 || updates.length > 20) {
     return NextResponse.json({ error: "Liste de mises à jour invalide" }, { status: 400 });
+  }
+
+  const confirmSkus = Array.isArray(body.confirmSkus) ? body.confirmSkus : [];
+  const requestedSkus = updates.map((update) => update.sku).sort();
+  const confirmedSkus = [...new Set(confirmSkus)].sort();
+  const explicitSelection = body.source === "citron-safety-panel" &&
+    requestedSkus.length === confirmedSkus.length &&
+    requestedSkus.every((sku, index) => sku === confirmedSkus[index]);
+
+  if (!explicitSelection) {
+    return NextResponse.json({
+      error: "Mise à jour bloquée : sélection explicite des SKU requise. Utilisez le panneau Sécurité prix Citron."
+    }, { status: 409 });
   }
 
   for (const update of updates) {
