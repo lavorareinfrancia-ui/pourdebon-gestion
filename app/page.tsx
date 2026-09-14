@@ -26,8 +26,8 @@ type WooProduct = {
   categories: string[];
 };
 
-type OffersResponse = { total_count?: number; offers?: Offer[]; error?: string };
-type ShopResponse = { count?: number; products?: WooProduct[]; error?: string };
+type OffersResponse = { offers?: Offer[]; error?: string };
+type ShopResponse = { products?: WooProduct[]; error?: string };
 
 type AuditInfo = {
   weightKg: number | null;
@@ -41,10 +41,14 @@ type AuditRow = {
   offer: Offer;
   info: AuditInfo;
   shopProduct: WooProduct | null;
+  boutiquePackTtc: number | null;
   boutiqueTtcPerKg: number | null;
+  currentPdbTtc: number | null;
+  netPdbHtPack: number | null;
+  netPdbHtPerKg: number | null;
+  exactTargetTtc: number | null;
   targetTtc: number | null;
-  netHtPerKg: number | null;
-  boutiqueHtPerKg: number | null;
+  differenceTtc: number | null;
 };
 
 function normalize(value: string | null | undefined) {
@@ -113,6 +117,12 @@ function roundUpEuro(value: number | null) {
 
 function money(value: number | null) {
   return value == null || !Number.isFinite(value) ? "—" : `${value.toFixed(2)} €`;
+}
+
+function signedMoney(value: number | null) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)} €`;
 }
 
 function percent(value: number | null) {
@@ -193,18 +203,35 @@ export default function Home() {
     if (isProName(offer.product_title)) return null;
     const info = auditInfo(offer);
     if (!info.group || info.family === "citron" || !info.weightKg) return null;
+
     const shopProduct = matchShopProduct(offer, shopProducts);
     const shopWeight = shopProduct ? weightFromTitle(wooText(shopProduct)) : null;
-    const boutiqueTtcPerKg = shopProduct?.price != null && shopWeight ? shopProduct.price / shopWeight : null;
-    const currentTtc = offer.price == null ? null : Number(offer.price);
-    const saleHt = currentTtc != null ? currentTtc / (1 + info.vatRate) : null;
-    const netHt = saleHt != null && info.commissionHtRate != null ? saleHt * (1 - info.commissionHtRate) : null;
-    const netHtPerKg = netHt != null ? netHt / info.weightKg : null;
+    const boutiquePackTtc = shopProduct?.price ?? null;
+    const boutiqueTtcPerKg = boutiquePackTtc != null && shopWeight ? boutiquePackTtc / shopWeight : null;
+    const currentPdbTtc = offer.price == null ? null : Number(offer.price);
+    const saleHt = currentPdbTtc != null ? currentPdbTtc / (1 + info.vatRate) : null;
+    const netPdbHtPack = saleHt != null && info.commissionHtRate != null ? saleHt * (1 - info.commissionHtRate) : null;
+    const netPdbHtPerKg = netPdbHtPack != null ? netPdbHtPack / info.weightKg : null;
     const boutiqueHtPerKg = boutiqueTtcPerKg != null ? boutiqueTtcPerKg / (1 + info.vatRate) : null;
     const exactTargetTtc = boutiqueHtPerKg != null && info.commissionHtRate != null
       ? (boutiqueHtPerKg * info.weightKg / (1 - info.commissionHtRate)) * (1 + info.vatRate)
       : null;
-    return { offer, info, shopProduct, boutiqueTtcPerKg, targetTtc: roundUpEuro(exactTargetTtc), netHtPerKg, boutiqueHtPerKg };
+    const targetTtc = roundUpEuro(exactTargetTtc);
+    const differenceTtc = targetTtc != null && currentPdbTtc != null ? targetTtc - currentPdbTtc : null;
+
+    return {
+      offer,
+      info,
+      shopProduct,
+      boutiquePackTtc,
+      boutiqueTtcPerKg,
+      currentPdbTtc,
+      netPdbHtPack,
+      netPdbHtPerKg,
+      exactTargetTtc,
+      targetTtc,
+      differenceTtc,
+    };
   }).filter((row): row is AuditRow => row !== null).sort((a, b) => {
     const fa = familyOrder.indexOf(a.info.family ?? "");
     const fb = familyOrder.indexOf(b.info.family ?? "");
@@ -242,8 +269,8 @@ export default function Home() {
       <section style={styles.header}>
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
-          <h1 style={styles.title}>Correction des prix frais</h1>
-          <p style={styles.subtitle}>Le Citron et toutes les références PRO sont exclus. Les prix boutique proviennent maintenant des variations WooCommerce exactes par poids.</p>
+          <h1 style={styles.title}>Audit des prix frais</h1>
+          <p style={styles.subtitle}>Citron et références PRO exclus. Chaque valeur indique clairement si elle est TTC ou HT, par confezione ou par kg.</p>
         </div>
         <button onClick={loadData} disabled={loading || updatingSku !== null} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
       </section>
@@ -254,61 +281,86 @@ export default function Home() {
       {groups.map((group) => {
         const groupRows = rows.filter((row) => row.info.group === group);
         if (!groupRows.length) return null;
-        return <section key={group} style={styles.panel}>
-          <div style={styles.sectionTitle}>{groupLabel[group]}</div>
-          <div style={styles.tableWrap}>
-            <table style={styles.table}>
-              <thead><tr>
-                <th style={styles.th}>Produit</th><th style={styles.th}>SKU</th><th style={styles.thRight}>Prix PDB</th><th style={styles.thRight}>Commission HT</th><th style={styles.th}>Référence boutique live</th><th style={styles.thRight}>Boutique €/kg</th><th style={styles.thRight}>Net PDB HT/kg</th><th style={styles.thRight}>Cible</th><th style={styles.th}>Action</th>
-              </tr></thead>
-              <tbody>{groupRows.map((row, index) => {
-                const sku = row.offer.shop_sku;
-                const current = row.offer.price == null ? null : Number(row.offer.price);
-                const changed = current != null && row.targetTtc != null && Math.abs(current - row.targetTtc) > 0.001;
-                const canApply = Boolean(sku && row.shopProduct && row.info.commissionHtRate != null && row.targetTtc != null && changed);
-                return <tr key={`${sku ?? row.offer.product_sku ?? "offer"}-${index}`}>
-                  <td style={styles.td}><strong>{row.offer.product_title ?? "—"}</strong></td>
-                  <td style={styles.td}>{sku ?? "—"}</td>
-                  <td style={styles.tdRight}>{money(current)}</td>
-                  <td style={styles.tdRight}>{percent(row.info.commissionHtRate)}</td>
-                  <td style={styles.td}>{row.shopProduct?.name ?? "Correspondance WooCommerce à résoudre"}{row.shopProduct?.price != null ? ` · ${money(row.shopProduct.price)}` : ""}</td>
-                  <td style={styles.tdRight}>{money(row.boutiqueTtcPerKg)}</td>
-                  <td style={styles.tdRight}>{money(row.netHtPerKg)}</td>
-                  <td style={{ ...styles.tdRight, fontWeight: 800 }}>{money(row.targetTtc)}</td>
-                  <td style={styles.td}>
-                    {row.shopProduct == null ? <span style={styles.badgeNeutral}>À associer</span> : row.info.commissionHtRate == null ? <span style={styles.badgeNeutral}>Commission à vérifier</span> : !changed ? <span style={styles.badgeOk}>Déjà aligné</span> : <button disabled={!canApply || updatingSku !== null} onClick={() => applyOne(row)} style={styles.button}>{updatingSku === sku ? "Mise à jour…" : "Appliquer"}</button>}
-                  </td>
-                </tr>;
-              })}</tbody>
-            </table>
+
+        return <section key={group} style={styles.group}>
+          <h2 style={styles.groupTitle}>{groupLabel[group]}</h2>
+          <div style={styles.cards}>
+            {groupRows.map((row, index) => {
+              const sku = row.offer.shop_sku;
+              const changed = row.differenceTtc != null && Math.abs(row.differenceTtc) > 0.001;
+              const canApply = Boolean(sku && row.shopProduct && row.info.commissionHtRate != null && row.targetTtc != null && changed);
+              const sourceLabel = row.shopProduct
+                ? `${row.shopProduct.parent_name ?? row.shopProduct.name ?? "WooCommerce"}${row.shopProduct.variation ? ` · ${row.shopProduct.variation}` : ""}`
+                : "Correspondance WooCommerce à résoudre";
+
+              return <article key={`${sku ?? row.offer.product_sku ?? "offer"}-${index}`} style={styles.card}>
+                <div style={styles.cardHeader}>
+                  <div>
+                    <div style={styles.productName}>{row.offer.product_title ?? "—"}</div>
+                    <div style={styles.meta}>SKU Pourdebon: <strong>{sku ?? "—"}</strong> · Poids détecté: <strong>{row.info.weightKg ? `${row.info.weightKg * 1000} g` : "—"}</strong></div>
+                    <div style={styles.source}>WooCommerce: {sourceLabel}</div>
+                  </div>
+                  <div>
+                    {row.shopProduct == null ? <span style={styles.badgeNeutral}>À associer</span>
+                      : row.info.commissionHtRate == null ? <span style={styles.badgeNeutral}>Commission à vérifier</span>
+                      : !changed ? <span style={styles.badgeOk}>Déjà aligné</span>
+                      : <button disabled={!canApply || updatingSku !== null} onClick={() => applyOne(row)} style={styles.button}>{updatingSku === sku ? "Mise à jour…" : "Appliquer le prix"}</button>}
+                  </div>
+                </div>
+
+                <div style={styles.metrics}>
+                  <Metric label="Boutique · confezione TTC" value={money(row.boutiquePackTtc)} />
+                  <Metric label="Boutique · TTC/kg" value={money(row.boutiqueTtcPerKg)} />
+                  <Metric label="Pourdebon actuel · TTC" value={money(row.currentPdbTtc)} />
+                  <Metric label="Commission Pourdebon · HT" value={percent(row.info.commissionHtRate)} />
+                  <Metric label="Net PDB · HT/confezione" value={money(row.netPdbHtPack)} />
+                  <Metric label="Net PDB · HT/kg" value={money(row.netPdbHtPerKg)} />
+                  <Metric label="Target matematico · TTC" value={money(row.exactTargetTtc)} />
+                  <Metric label="Target arrotondato · TTC" value={money(row.targetTtc)} strong />
+                  <Metric label="Differenza da applicare" value={signedMoney(row.differenceTtc)} strong />
+                </div>
+              </article>;
+            })}
           </div>
         </section>;
       })}
 
-      <section style={styles.note}><strong>Regola:</strong> nessun prezzo viene più calcolato usando il prezzo del prodotto padre WooCommerce. Se non troviamo una variazione con peso esatto, la riga resta “À associer” e non è aggiornabile.</section>
+      <section style={styles.note}><strong>Come leggere:</strong> “Boutique TTC/kg” serve solo per confrontare il prezzo al kg. “Net PDB HT/kg” è invece ciò che resta economicamente dopo IVA prodotto e commissione HT: non va confrontato direttamente con un valore TTC. Il prezzo da applicare è sempre il “Target arrotondato TTC”.</section>
     </main>
   );
 }
 
+function Metric({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+  return <div style={styles.metric}>
+    <span style={styles.metricLabel}>{label}</span>
+    <strong style={{ ...styles.metricValue, ...(strong ? styles.metricStrong : {}) }}>{value}</strong>
+  </div>;
+}
+
 const styles: Record<string, React.CSSProperties> = {
-  page: { minHeight: "100vh", background: "#f6f3ee", color: "#26231f", fontFamily: "Arial, Helvetica, sans-serif", padding: "28px 18px 56px", overflowX: "hidden" },
-  header: { maxWidth: 1180, margin: "0 auto 20px", display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-end", flexWrap: "wrap" },
+  page: { minHeight: "100vh", background: "#f6f3ee", color: "#26231f", fontFamily: "Arial, Helvetica, sans-serif", padding: "28px 18px 56px" },
+  header: { maxWidth: 1120, margin: "0 auto 20px", display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-end", flexWrap: "wrap" },
   eyebrow: { margin: "0 0 7px", fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#7a6654" },
   title: { margin: 0, fontSize: "clamp(28px, 4vw, 40px)", lineHeight: 1.05 },
-  subtitle: { margin: "10px 0 0", maxWidth: 820, color: "#6e675f", lineHeight: 1.45, fontSize: 14 },
-  button: { border: 0, borderRadius: 8, background: "#26231f", color: "white", padding: "8px 11px", fontWeight: 700, fontSize: 12, cursor: "pointer" },
+  subtitle: { margin: "10px 0 0", maxWidth: 780, color: "#6e675f", lineHeight: 1.45, fontSize: 14 },
   secondaryButton: { border: "1px solid #cfc7bd", borderRadius: 9, background: "white", color: "#26231f", padding: "10px 15px", fontWeight: 700, cursor: "pointer" },
-  panel: { maxWidth: 1180, margin: "0 auto 16px", background: "white", border: "1px solid #e5dfd7", borderRadius: 14, overflow: "hidden" },
-  sectionTitle: { padding: "13px 15px", fontSize: 18, fontWeight: 800, borderBottom: "1px solid #ece7e1", background: "#faf8f5" },
-  tableWrap: { width: "100%", overflowX: "hidden" },
-  table: { width: "100%", borderCollapse: "collapse", tableLayout: "fixed" },
-  th: { textAlign: "left", padding: "10px 7px", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.03em", color: "#7b746c", background: "#faf8f5", borderBottom: "1px solid #ece7e1", whiteSpace: "normal", wordBreak: "break-word" },
-  thRight: { textAlign: "right", padding: "10px 7px", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.03em", color: "#7b746c", background: "#faf8f5", borderBottom: "1px solid #ece7e1", whiteSpace: "normal", wordBreak: "break-word" },
-  td: { padding: "10px 7px", borderBottom: "1px solid #f0ece7", fontSize: 12, verticalAlign: "middle", overflowWrap: "anywhere" },
-  tdRight: { padding: "10px 7px", borderBottom: "1px solid #f0ece7", fontSize: 12, verticalAlign: "middle", textAlign: "right", whiteSpace: "normal", overflowWrap: "anywhere" },
-  badgeNeutral: { display: "inline-block", padding: "4px 7px", borderRadius: 999, background: "#f1eee9", fontSize: 10, fontWeight: 700, color: "#655e56" },
-  badgeOk: { display: "inline-block", padding: "4px 7px", borderRadius: 999, background: "#e8f5ea", fontSize: 10, fontWeight: 700, color: "#276235" },
-  success: { maxWidth: 1180, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#e8f5ea", color: "#276235", border: "1px solid #bcdcc3" },
-  error: { maxWidth: 1180, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1" },
-  note: { maxWidth: 1180, margin: "14px auto 0", padding: 14, borderRadius: 10, background: "#efeae3", color: "#5f574e", fontSize: 12, lineHeight: 1.5 },
+  group: { maxWidth: 1120, margin: "0 auto 24px" },
+  groupTitle: { margin: "0 0 10px", fontSize: 22 },
+  cards: { display: "grid", gap: 12 },
+  card: { background: "white", border: "1px solid #e5dfd7", borderRadius: 14, padding: 16 },
+  cardHeader: { display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-start", flexWrap: "wrap", paddingBottom: 12, borderBottom: "1px solid #eee8e1" },
+  productName: { fontSize: 17, fontWeight: 800, lineHeight: 1.25 },
+  meta: { marginTop: 5, fontSize: 12, color: "#6d655d" },
+  source: { marginTop: 5, fontSize: 12, color: "#6d655d" },
+  metrics: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, paddingTop: 12 },
+  metric: { background: "#faf8f5", border: "1px solid #eee8e1", borderRadius: 10, padding: "10px 11px", minHeight: 64, display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 6 },
+  metricLabel: { fontSize: 10, color: "#756d65", textTransform: "uppercase", letterSpacing: "0.03em", lineHeight: 1.25 },
+  metricValue: { fontSize: 16, lineHeight: 1.1 },
+  metricStrong: { fontSize: 18 },
+  button: { border: 0, borderRadius: 8, background: "#26231f", color: "white", padding: "10px 13px", fontWeight: 700, fontSize: 12, cursor: "pointer" },
+  badgeNeutral: { display: "inline-block", padding: "6px 9px", borderRadius: 999, background: "#f1eee9", fontSize: 11, fontWeight: 700, color: "#655e56" },
+  badgeOk: { display: "inline-block", padding: "6px 9px", borderRadius: 999, background: "#e8f5ea", fontSize: 11, fontWeight: 700, color: "#276235" },
+  success: { maxWidth: 1120, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#e8f5ea", color: "#276235", border: "1px solid #bcdcc3" },
+  error: { maxWidth: 1120, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1" },
+  note: { maxWidth: 1120, margin: "14px auto 0", padding: 14, borderRadius: 10, background: "#efeae3", color: "#5f574e", fontSize: 12, lineHeight: 1.55 },
 };
