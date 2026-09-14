@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import CitronSafetyPanel from "./CitronSafetyPanel";
 
 export const metadata = {
   title: "Pourdebon Gestion",
@@ -8,7 +9,10 @@ export const metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="fr">
-      <body>{children}</body>
+      <body style={{ margin: 0 }}>
+        {children}
+        <CitronSafetyPanel />
+      </body>
     </html>
   );
 }
