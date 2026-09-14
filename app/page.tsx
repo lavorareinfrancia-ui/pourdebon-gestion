@@ -24,11 +24,15 @@ type AuditInfo = {
   vatRate: number | null;
 };
 
-const CITRON_500_TARGET = 17.9;
-const CITRON_750_TARGET = 26.5;
+const CITRON_500_TARGET = 18;
+const CITRON_750_TARGET = 27;
 
 function normalizeTitle(value: string | null) {
   return (value ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function roundUpEuro(value: number | null) {
+  return value == null || !Number.isFinite(value) ? null : Math.ceil(value);
 }
 
 function auditInfo(offer: Offer): AuditInfo {
@@ -114,7 +118,9 @@ export default function Home() {
 
   async function applyCitronPrices() {
     if (citronUpdates.length === 0) return;
-    setUpdating(true); setError(""); setMessage("");
+    setUpdating(true);
+    setError("");
+    setMessage("");
     try {
       const response = await fetch("/api/pourdebon/prices", {
         method: "POST",
@@ -147,7 +153,7 @@ export default function Home() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Gestion des produits</h1>
-          <p style={styles.subtitle}>Audit catalogue et prix. Comparaison économique HT : la TVA sur la commission Pourdebon est considérée récupérable.</p>
+          <p style={styles.subtitle}>Audit catalogue et prix. Comparaison économique HT : la TVA sur la commission Pourdebon est considérée récupérable. Les prix cibles sont toujours arrondis à l’euro supérieur pour couvrir aussi les coûts d’emballage et d’étiquetage.</p>
         </div>
         <div style={styles.actions}>
           <button onClick={loadOffers} disabled={loading || updating} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
@@ -161,7 +167,7 @@ export default function Home() {
         <div style={styles.card}><span style={styles.cardLabel}>Offres</span><strong style={styles.cardValue}>{total}</strong></div>
         <div style={styles.card}><span style={styles.cardLabel}>Alertes prix Citron</span><strong style={styles.cardValue}>{citronAlerts}</strong></div>
         <div style={styles.card}><span style={styles.cardLabel}>Référence boutique Citron</span><strong style={{ ...styles.cardValue, fontSize: 20 }}>24,50 €/kg TTC</strong></div>
-        <div style={styles.card}><span style={styles.cardLabel}>Cibles Pourdebon arrondies</span><strong style={{ ...styles.cardValue, fontSize: 18 }}>500 g: 17,90 € · 750 g: 26,50 €</strong></div>
+        <div style={styles.card}><span style={styles.cardLabel}>Cibles Pourdebon</span><strong style={{ ...styles.cardValue, fontSize: 18 }}>500 g: 18,00 € · 750 g: 27,00 €</strong></div>
       </section>
 
       {message && <section style={styles.success}>{message}</section>}
@@ -186,9 +192,7 @@ export default function Home() {
                 const exactTargetTtc = boutiqueHtPerKg != null && info.weightKg != null && info.commissionHtRate != null && info.vatRate != null
                   ? (boutiqueHtPerKg * info.weightKg / (1 - info.commissionHtRate)) * (1 + info.vatRate)
                   : null;
-                const displayTarget = normalizeTitle(offer.product_title).includes("citron") && normalizeTitle(offer.product_title).includes("500") ? CITRON_500_TARGET
-                  : normalizeTitle(offer.product_title).includes("citron") && normalizeTitle(offer.product_title).includes("750") ? CITRON_750_TARGET
-                  : exactTargetTtc;
+                const displayTarget = roundUpEuro(exactTargetTtc);
                 const gapHtKg = netHtPerKg != null && boutiqueHtPerKg != null ? netHtPerKg - boutiqueHtPerKg : null;
                 let auditLabel = "Référence boutique à renseigner";
                 let auditStyle = styles.badgeNeutral;
@@ -209,7 +213,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section style={styles.note}><strong>Méthode :</strong> les commissions sont comparées en HT. La TVA de 20 % facturée par Pourdebon sur sa commission n’est pas traitée comme un coût puisqu’elle est récupérable. Pour les produits frais Citron, la vente est ramenée en HT à partir du taux de TVA de 5,5 % observé sur les transactions. Les cibles exactes ressortent à environ 17,71 € (500 g) et 26,26 € (750 g) TTC ; elles sont arrondies à 17,90 € et 26,50 €.</section>
+      <section style={styles.note}><strong>Méthode :</strong> comparaison en HT avec TVA de commission récupérable. Pour les frais annexes (cartons, étiquettes, préparation), toute cible calculée est arrondie systématiquement à l’euro entier supérieur. Pour le Citron : cible économique exacte ≈ 17,71 € / 26,26 €, prix appliqués = 18 € / 27 €.</section>
     </main>
   );
 }
@@ -220,7 +224,7 @@ const styles: Record<string, React.CSSProperties> = {
   actions: { display: "flex", gap: 10, flexWrap: "wrap" },
   eyebrow: { margin: "0 0 8px", fontSize: 13, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#7a6654" },
   title: { margin: 0, fontSize: "clamp(32px, 5vw, 48px)", lineHeight: 1.05 },
-  subtitle: { margin: "12px 0 0", maxWidth: 840, color: "#6e675f", lineHeight: 1.5 },
+  subtitle: { margin: "12px 0 0", maxWidth: 900, color: "#6e675f", lineHeight: 1.5 },
   button: { border: 0, borderRadius: 10, background: "#26231f", color: "white", padding: "12px 18px", fontWeight: 700, cursor: "pointer" },
   secondaryButton: { border: "1px solid #cfc7bd", borderRadius: 10, background: "white", color: "#26231f", padding: "12px 18px", fontWeight: 700, cursor: "pointer" },
   stats: { maxWidth: 1380, margin: "0 auto 18px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 },
@@ -231,7 +235,7 @@ const styles: Record<string, React.CSSProperties> = {
   toolbar: { padding: 16, borderBottom: "1px solid #ece7e1" },
   input: { width: "min(420px, 100%)", border: "1px solid #d8d1c8", borderRadius: 10, padding: "11px 13px", fontSize: 15, outline: "none" },
   tableWrap: { overflowX: "auto" },
-  table: { width: "100%", borderCollapse: "collapse", minWidth: 1500 },
+  table: { width: "100%", borderCollapse: "collapse", minWidth: 1450 },
   th: { textAlign: "left", padding: "13px 12px", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "#7b746c", background: "#faf8f5", borderBottom: "1px solid #ece7e1", whiteSpace: "nowrap" },
   thRight: { textAlign: "right", padding: "13px 12px", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "#7b746c", background: "#faf8f5", borderBottom: "1px solid #ece7e1", whiteSpace: "nowrap" },
   td: { padding: "13px 12px", borderBottom: "1px solid #f0ece7", fontSize: 13, verticalAlign: "middle", whiteSpace: "nowrap" },
@@ -239,9 +243,9 @@ const styles: Record<string, React.CSSProperties> = {
   badgeNeutral: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#f1eee9", fontSize: 11, fontWeight: 700, color: "#655e56" },
   badgeOk: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#e8f5ea", fontSize: 11, fontWeight: 700, color: "#276235" },
   badgeWarn: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#fff3d6", fontSize: 11, fontWeight: 700, color: "#8a6500" },
-  badgeBad: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#fde8e5", fontSize: 11, fontWeight: 700, color: "#a33a2b" },
+  badgeBad: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#fde8e6", fontSize: 11, fontWeight: 700, color: "#a33a2b" },
   empty: { padding: 32, textAlign: "center", color: "#7b746c" },
-  note: { maxWidth: 1380, margin: "18px auto 0", padding: 16, borderRadius: 12, background: "#fffaf0", border: "1px solid #eadfc6", color: "#655e56", lineHeight: 1.5 },
   error: { maxWidth: 1380, margin: "0 auto 18px", padding: 14, borderRadius: 10, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1" },
-  success: { maxWidth: 1380, margin: "0 auto 18px", padding: 14, borderRadius: 10, background: "#eef8ef", color: "#276235", border: "1px solid #cde5d1" },
+  success: { maxWidth: 1380, margin: "0 auto 18px", padding: 14, borderRadius: 10, background: "#edf8ef", color: "#276235", border: "1px solid #cce7d1" },
+  note: { maxWidth: 1380, margin: "18px auto 0", padding: 16, borderRadius: 12, background: "#eee9e2", color: "#5d554d", fontSize: 13, lineHeight: 1.55 },
 };
