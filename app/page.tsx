@@ -69,8 +69,8 @@ function familyFromTitle(value: string | null | undefined) {
   const t = normalize(value);
   if (t.includes("citron")) return "citron";
   if (t.includes("ricotta") && (t.includes("epinard") || t.includes("spinaci"))) return "ricotta-epinards";
-  if (t.includes("noisette") || t.includes("tome") || t.includes("toma") || t.includes("roero")) return "roero";
-  if (t.includes("tradition") || t.includes("piemont")) return "traditionnels";
+  if (t.includes("roero") || t.includes("noisette") || t.includes("tome") || t.includes("toma")) return "roero";
+  if (t.includes("tradition") || t.includes("agnolotti")) return "traditionnels";
   if (t.includes("tagliatelle")) return "tagliatelle";
   if (t.includes("pappardelle")) return "pappardelle";
   if (t.includes("tagliolini") || t.includes("tajarin")) return "tagliolini";
@@ -115,14 +115,43 @@ function percent(value: number | null) {
   return value == null || !Number.isFinite(value) ? "—" : `${(value * 100).toFixed(1)} %`;
 }
 
+function wooText(product: WooProduct) {
+  return normalize(`${product.name ?? ""} ${(product.categories ?? []).join(" ")}`);
+}
+
+function isFreshWooProduct(product: WooProduct) {
+  const t = wooText(product);
+  if (t.includes("deshydrat") || t.includes("sechee") || t.includes("seche") || t.includes("epicerie")) return false;
+  return t.includes("fraiche") || t.includes("frais") || t.includes("ravioli") || t.includes("gnocchi") || t.includes("retrait");
+}
+
 function matchShopProduct(offer: Offer, products: WooProduct[]) {
   const family = familyFromTitle(offer.product_title);
   const weight = weightFromTitle(offer.product_title);
   if (!family || family === "citron" || isProName(offer.product_title)) return null;
-  const candidates = products.filter((product) => !isProName(product.name) && familyFromTitle(product.name) === family && product.price != null);
-  const exact = candidates.find((product) => weight != null && weightFromTitle(product.name) === weight);
-  if (exact) return exact;
-  return candidates.length === 1 ? candidates[0] : null;
+
+  let candidates = products.filter((product) => {
+    if (isProName(product.name) || product.price == null) return false;
+    return familyFromTitle(wooText(product)) === family;
+  });
+
+  const fresh = candidates.filter(isFreshWooProduct);
+  if (fresh.length) candidates = fresh;
+
+  const exactWeight = candidates.find((product) => weight != null && weightFromTitle(wooText(product)) === weight);
+  if (exactWeight) return exactWeight;
+
+  if (candidates.length === 1) return candidates[0];
+
+  const offerWords = new Set(normalize(offer.product_title).split(" ").filter((word) => word.length > 3));
+  const scored = candidates.map((product) => {
+    const words = normalize(product.name).split(" ");
+    const score = words.reduce((sum, word) => sum + (offerWords.has(word) ? 1 : 0), 0);
+    return { product, score };
+  }).sort((a, b) => b.score - a.score);
+
+  if (scored.length && scored[0].score > 0 && (scored.length === 1 || scored[0].score > scored[1].score)) return scored[0].product;
+  return null;
 }
 
 const familyOrder = ["ricotta-epinards", "roero", "traditionnels", "tagliatelle", "pappardelle", "tagliolini", "gnocchi"];
@@ -168,7 +197,7 @@ export default function Home() {
     const info = auditInfo(offer);
     if (!info.group || info.family === "citron" || !info.weightKg) return null;
     const shopProduct = matchShopProduct(offer, shopProducts);
-    const shopWeight = weightFromTitle(shopProduct?.name);
+    const shopWeight = weightFromTitle(shopProduct ? wooText(shopProduct) : null) ?? info.weightKg;
     const boutiqueTtcPerKg = shopProduct?.price != null && shopWeight ? shopProduct.price / shopWeight : null;
     const currentTtc = offer.price == null ? null : Number(offer.price);
     const saleHt = currentTtc != null ? currentTtc / (1 + info.vatRate) : null;
@@ -217,7 +246,7 @@ export default function Home() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Correction des prix frais</h1>
-          <p style={styles.subtitle}>Le Citron et toutes les références PRO sont exclus. On avance dans l’ordre : ravioli, pasta fraîche, gnocchi. Une seule référence est modifiée à la fois.</p>
+          <p style={styles.subtitle}>Le Citron et toutes les références PRO sont exclus. Les correspondances WooCommerce sont recherchées par famille, catégorie et nom, même si le poids n’est pas dans le titre WooCommerce.</p>
         </div>
         <button onClick={loadData} disabled={loading || updatingSku !== null} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
       </section>
@@ -245,12 +274,12 @@ export default function Home() {
                   <td style={styles.td}>{sku ?? "—"}</td>
                   <td style={styles.tdRight}>{money(current)}</td>
                   <td style={styles.tdRight}>{percent(row.info.commissionHtRate)}</td>
-                  <td style={styles.td}>{row.shopProduct?.name ?? "Non presente su WooCommerce"}{row.shopProduct?.price != null ? ` · ${money(row.shopProduct.price)}` : ""}</td>
+                  <td style={styles.td}>{row.shopProduct?.name ?? "Correspondance WooCommerce à résoudre"}{row.shopProduct?.price != null ? ` · ${money(row.shopProduct.price)}` : ""}</td>
                   <td style={styles.tdRight}>{money(row.boutiqueTtcPerKg)}</td>
                   <td style={styles.tdRight}>{money(row.netHtPerKg)}</td>
                   <td style={{ ...styles.tdRight, fontWeight: 800 }}>{money(row.targetTtc)}</td>
                   <td style={styles.td}>
-                    {row.shopProduct == null ? <span style={styles.badgeNeutral}>Ignoré</span> : row.info.commissionHtRate == null ? <span style={styles.badgeNeutral}>Commission à vérifier</span> : !changed ? <span style={styles.badgeOk}>Déjà aligné</span> : <button disabled={!canApply || updatingSku !== null} onClick={() => applyOne(row)} style={styles.button}>{updatingSku === sku ? "Mise à jour…" : "Appliquer"}</button>}
+                    {row.shopProduct == null ? <span style={styles.badgeNeutral}>À associer</span> : row.info.commissionHtRate == null ? <span style={styles.badgeNeutral}>Commission à vérifier</span> : !changed ? <span style={styles.badgeOk}>Déjà aligné</span> : <button disabled={!canApply || updatingSku !== null} onClick={() => applyOne(row)} style={styles.button}>{updatingSku === sku ? "Mise à jour…" : "Appliquer"}</button>}
                   </td>
                 </tr>;
               })}</tbody>
@@ -259,7 +288,7 @@ export default function Home() {
         </section>;
       })}
 
-      <section style={styles.note}><strong>Regola:</strong> il prezzo boutique arriva dal catalogo WooCommerce live. Il target considera la commissione HT osservata, l’IVA sulla commissione recuperabile e viene arrotondato sempre all’euro superiore. I prodotti Citron, PRO e quelli assenti da WooCommerce sono ignorati in questa fase.</section>
+      <section style={styles.note}><strong>Regola:</strong> Citron e PRO sono esclusi. Una mancata associazione non significa che il prodotto non esiste su WooCommerce: viene indicata come “À associer” finché il matching non è certo.</section>
     </main>
   );
 }
