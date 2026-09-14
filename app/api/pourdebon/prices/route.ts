@@ -9,27 +9,59 @@ type PriceUpdate = {
 
 type MiraklOffer = {
   shop_sku?: string;
-  all_prices?: Array<Record<string, unknown>>;
+  price?: number;
   discount?: Record<string, unknown> | null;
   applicable_pricing?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
 
-function hasActiveOrSpecialPricing(offer: MiraklOffer) {
-  const allPrices = Array.isArray(offer.all_prices) ? offer.all_prices : [];
-  if (allPrices.length > 1) return true;
+function asDate(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
 
-  const pricing = offer.applicable_pricing;
-  if (pricing && typeof pricing === "object") {
-    const origin = Number(pricing.unit_origin_price ?? pricing.price ?? 0);
-    const discount = Number(pricing.unit_discount_price ?? 0);
-    if (discount > 0 && origin > 0 && discount < origin) return true;
-  }
+function isWithinActiveWindow(start: Date | null, end: Date | null) {
+  const now = new Date();
+  if (start && now < start) return false;
+  if (end && now > end) return false;
+  return true;
+}
+
+function hasActivePromotion(offer: MiraklOffer) {
+  const regularPrice = Number(offer.price ?? 0);
 
   const discount = offer.discount;
   if (discount && typeof discount === "object") {
-    const price = Number(discount.price ?? 0);
-    if (price > 0) return true;
+    const discountPrice = Number(discount.price ?? 0);
+    const start = asDate(discount.start_date ?? discount.startDate);
+    const end = asDate(discount.end_date ?? discount.endDate);
+
+    if (
+      discountPrice > 0 &&
+      regularPrice > 0 &&
+      discountPrice < regularPrice &&
+      isWithinActiveWindow(start, end)
+    ) {
+      return true;
+    }
+  }
+
+  const pricing = offer.applicable_pricing;
+  if (pricing && typeof pricing === "object") {
+    const origin = Number(pricing.unit_origin_price ?? pricing.price ?? regularPrice ?? 0);
+    const discounted = Number(pricing.unit_discount_price ?? 0);
+    const start = asDate(pricing.discount_start_date ?? pricing.start_date);
+    const end = asDate(pricing.discount_end_date ?? pricing.end_date);
+
+    if (
+      discounted > 0 &&
+      origin > 0 &&
+      discounted < origin &&
+      isWithinActiveWindow(start, end)
+    ) {
+      return true;
+    }
   }
 
   return false;
@@ -87,9 +119,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `Offre ${update.sku} introuvable ou ambiguë` }, { status: 409 });
       }
 
-      if (hasActiveOrSpecialPricing(matches[0])) {
+      if (hasActivePromotion(matches[0])) {
         return NextResponse.json({
-          error: `L'offre ${update.sku} possède une promotion ou une tarification spéciale. Mise à jour bloquée pour éviter d'effacer un prix existant.`
+          error: `L'offre ${update.sku} possède une promotion active. Mise à jour bloquée pour éviter d'écraser le prix promotionnel.`
         }, { status: 409 });
       }
     }
