@@ -39,7 +39,7 @@ function toAmount(value: string | undefined, minorUnit: number | undefined) {
 function parentIdFromVariation(product: WooProduct) {
   const href = product._links?.up?.[0]?.href;
   if (!href) return null;
-  const match = href.match(/\/products\/(\d+)(?:\?|$)/);
+  const match = href.match(/\/products\/(\d+)(?:\/|\?|$)/);
   return match ? Number(match[1]) : null;
 }
 
@@ -47,7 +47,7 @@ function normalizeProduct(product: WooProduct, parent?: WooProduct | null) {
   const minorUnit = product.prices?.currency_minor_unit ?? parent?.prices?.currency_minor_unit ?? 2;
   const variation = product.variation?.trim() || null;
   const parentName = parent?.name?.trim() || null;
-  const isVariation = Boolean(parent);
+  const isVariation = Boolean(variation) || Boolean(parent);
   const displayName = isVariation
     ? [parentName ?? product.name ?? null, variation].filter(Boolean).join(" – ")
     : product.name ?? null;
