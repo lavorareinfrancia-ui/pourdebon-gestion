@@ -20,6 +20,30 @@ type MiraklOffersResponse = {
   [key: string]: unknown;
 };
 
+function normalize(value: string | null | undefined) {
+  return (value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function auditTitle(offer: MiraklOffer) {
+  const title = offer.product_title ?? null;
+  if (!title) return null;
+
+  const combined = normalize(`${title} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`);
+  const hasWeight = /\b(?:400|500|750|1000)\b/.test(combined) || /\b1\s*kg\b/.test(combined);
+  const freshLongPasta = combined.includes("tagliatelle") || combined.includes("pappardelle") || combined.includes("tagliolini") || combined.includes("tajarin");
+
+  // Retail long fresh pasta is sold in 400 g packs. Some legacy Mirakl titles/SKUs omit the weight,
+  // which caused the pricing audit to hide those offers entirely. This only enriches the local audit
+  // label; it does not modify the Mirakl product itself.
+  if (freshLongPasta && !hasWeight) return `${title} - 400 g`;
+  return title;
+}
+
 export async function GET(request: NextRequest) {
   const apiKey = process.env.POURDEBON_API_KEY;
   const baseUrl = process.env.POURDEBON_BASE_URL;
@@ -90,7 +114,7 @@ export async function GET(request: NextRequest) {
       offers: offers.map((offer) => ({
         shop_sku: offer.shop_sku ?? null,
         product_sku: offer.product_sku ?? null,
-        product_title: offer.product_title ?? null,
+        product_title: auditTitle(offer),
         product_brand: offer.product_brand ?? null,
         product_description: offer.product_description ?? null,
         price: offer.price ?? null,
