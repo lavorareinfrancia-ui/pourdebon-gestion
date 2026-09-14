@@ -13,7 +13,11 @@ type Offer = {
 
 type WooProduct = {
   id: number | null;
+  parent_id?: number | null;
+  is_variation?: boolean;
   name: string | null;
+  parent_name?: string | null;
+  variation?: string | null;
   sku: string | null;
   price: number | null;
   regular_price: number | null;
@@ -116,7 +120,7 @@ function percent(value: number | null) {
 }
 
 function wooText(product: WooProduct) {
-  return normalize(`${product.name ?? ""} ${(product.categories ?? []).join(" ")}`);
+  return normalize(`${product.name ?? ""} ${product.parent_name ?? ""} ${product.variation ?? ""} ${(product.categories ?? []).join(" ")}`);
 }
 
 function isFreshWooProduct(product: WooProduct) {
@@ -128,7 +132,7 @@ function isFreshWooProduct(product: WooProduct) {
 function matchShopProduct(offer: Offer, products: WooProduct[]) {
   const family = familyFromTitle(offer.product_title);
   const weight = weightFromTitle(offer.product_title);
-  if (!family || family === "citron" || isProName(offer.product_title)) return null;
+  if (!family || family === "citron" || !weight || isProName(offer.product_title)) return null;
 
   let candidates = products.filter((product) => {
     if (isProName(product.name) || product.price == null) return false;
@@ -138,19 +142,12 @@ function matchShopProduct(offer: Offer, products: WooProduct[]) {
   const fresh = candidates.filter(isFreshWooProduct);
   if (fresh.length) candidates = fresh;
 
-  const exactWeight = candidates.find((product) => weight != null && weightFromTitle(wooText(product)) === weight);
-  if (exactWeight) return exactWeight;
+  const exactWeight = candidates.filter((product) => weightFromTitle(wooText(product)) === weight);
+  if (exactWeight.length === 1) return exactWeight[0];
 
-  if (candidates.length === 1) return candidates[0];
+  const exactVariations = exactWeight.filter((product) => product.is_variation === true);
+  if (exactVariations.length === 1) return exactVariations[0];
 
-  const offerWords = new Set(normalize(offer.product_title).split(" ").filter((word) => word.length > 3));
-  const scored = candidates.map((product) => {
-    const words = normalize(product.name).split(" ");
-    const score = words.reduce((sum, word) => sum + (offerWords.has(word) ? 1 : 0), 0);
-    return { product, score };
-  }).sort((a, b) => b.score - a.score);
-
-  if (scored.length && scored[0].score > 0 && (scored.length === 1 || scored[0].score > scored[1].score)) return scored[0].product;
   return null;
 }
 
@@ -197,7 +194,7 @@ export default function Home() {
     const info = auditInfo(offer);
     if (!info.group || info.family === "citron" || !info.weightKg) return null;
     const shopProduct = matchShopProduct(offer, shopProducts);
-    const shopWeight = weightFromTitle(shopProduct ? wooText(shopProduct) : null) ?? info.weightKg;
+    const shopWeight = shopProduct ? weightFromTitle(wooText(shopProduct)) : null;
     const boutiqueTtcPerKg = shopProduct?.price != null && shopWeight ? shopProduct.price / shopWeight : null;
     const currentTtc = offer.price == null ? null : Number(offer.price);
     const saleHt = currentTtc != null ? currentTtc / (1 + info.vatRate) : null;
@@ -246,7 +243,7 @@ export default function Home() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Correction des prix frais</h1>
-          <p style={styles.subtitle}>Le Citron et toutes les références PRO sont exclus. Les correspondances WooCommerce sont recherchées par famille, catégorie et nom, même si le poids n’est pas dans le titre WooCommerce.</p>
+          <p style={styles.subtitle}>Le Citron et toutes les références PRO sont exclus. Les prix boutique proviennent maintenant des variations WooCommerce exactes par poids.</p>
         </div>
         <button onClick={loadData} disabled={loading || updatingSku !== null} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
       </section>
@@ -288,7 +285,7 @@ export default function Home() {
         </section>;
       })}
 
-      <section style={styles.note}><strong>Regola:</strong> Citron e PRO sono esclusi. Una mancata associazione non significa che il prodotto non esiste su WooCommerce: viene indicata come “À associer” finché il matching non è certo.</section>
+      <section style={styles.note}><strong>Regola:</strong> nessun prezzo viene più calcolato usando il prezzo del prodotto padre WooCommerce. Se non troviamo una variazione con peso esatto, la riga resta “À associer” e non è aggiornabile.</section>
     </main>
   );
 }
