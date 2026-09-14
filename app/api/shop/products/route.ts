@@ -10,6 +10,8 @@ type WooProduct = {
   slug?: string;
   sku?: string;
   permalink?: string;
+  description?: string;
+  short_description?: string;
   prices?: {
     price?: string;
     regular_price?: string;
@@ -55,6 +57,8 @@ export async function GET() {
         slug: product.slug ?? null,
         sku: product.sku ?? null,
         permalink: product.permalink ?? null,
+        description: product.description ?? null,
+        short_description: product.short_description ?? null,
         price: toAmount(product.prices?.price, minorUnit),
         regular_price: toAmount(product.prices?.regular_price, minorUnit),
         sale_price: toAmount(product.prices?.sale_price, minorUnit),
