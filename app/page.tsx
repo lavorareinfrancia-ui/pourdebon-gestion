@@ -28,8 +28,9 @@ type ShopResponse = { count?: number; products?: WooProduct[]; error?: string };
 type AuditInfo = {
   weightKg: number | null;
   commissionHtRate: number | null;
-  vatRate: number | null;
+  vatRate: number;
   family: string | null;
+  group: "ravioli" | "pasta" | "gnocchi" | null;
 };
 
 type AuditRow = {
@@ -37,7 +38,6 @@ type AuditRow = {
   info: AuditInfo;
   shopProduct: WooProduct | null;
   boutiqueTtcPerKg: number | null;
-  exactTargetTtc: number | null;
   targetTtc: number | null;
   netHtPerKg: number | null;
   boutiqueHtPerKg: number | null;
@@ -53,11 +53,11 @@ function normalize(value: string | null | undefined) {
 }
 
 function weightFromTitle(value: string | null | undefined) {
-  const title = normalize(value);
-  if (/\b1\s*kg\b/.test(title) || /\b1000\s*g\b/.test(title)) return 1;
-  if (/\b750\s*g?r?\b/.test(title) || title.includes("750")) return 0.75;
-  if (/\b500\s*g?r?\b/.test(title) || title.includes("500")) return 0.5;
-  if (/\b400\s*g?r?\b/.test(title) || title.includes("400")) return 0.4;
+  const t = normalize(value);
+  if (/\b1\s*kg\b/.test(t) || /\b1000\s*g\b/.test(t)) return 1;
+  if (t.includes("750")) return 0.75;
+  if (t.includes("500")) return 0.5;
+  if (t.includes("400")) return 0.4;
   return null;
 }
 
@@ -74,15 +74,20 @@ function familyFromTitle(value: string | null | undefined) {
   return null;
 }
 
+function groupFromFamily(family: string | null): AuditInfo["group"] {
+  if (["ricotta-epinards", "roero", "traditionnels"].includes(family ?? "")) return "ravioli";
+  if (["tagliatelle", "pappardelle", "tagliolini"].includes(family ?? "")) return "pasta";
+  if (family === "gnocchi") return "gnocchi";
+  return null;
+}
+
 function auditInfo(offer: Offer): AuditInfo {
   const title = normalize(offer.product_title);
-  const weightKg = weightFromTitle(offer.product_title);
   const family = familyFromTitle(offer.product_title);
+  const weightKg = weightFromTitle(offer.product_title);
   let commissionHtRate: number | null = null;
 
-  if (family === "citron" && title.includes("500")) commissionHtRate = 4.53 / 14.69;
-  else if (family === "citron" && title.includes("750")) commissionHtRate = 6.8 / 22.65;
-  else if (family === "ricotta-epinards" && title.includes("500")) commissionHtRate = 4.13 / 13.27;
+  if (family === "ricotta-epinards" && title.includes("500")) commissionHtRate = 4.13 / 13.27;
   else if (family === "ricotta-epinards" && title.includes("750")) commissionHtRate = 5.99 / 19.81;
   else if (family === "roero" && title.includes("500")) commissionHtRate = 4.37 / 14.12;
   else if (family === "roero" && title.includes("750")) commissionHtRate = 6.56 / 21.8;
@@ -91,7 +96,7 @@ function auditInfo(offer: Offer): AuditInfo {
   else if (["tagliatelle", "pappardelle", "tagliolini"].includes(family ?? "") && title.includes("400")) commissionHtRate = 1.94 / 5.59;
   else if (family === "gnocchi" && title.includes("500")) commissionHtRate = 2.75 / 8.44;
 
-  return { weightKg, commissionHtRate, vatRate: 0.055, family };
+  return { weightKg, commissionHtRate, vatRate: 0.055, family, group: groupFromFamily(family) };
 }
 
 function roundUpEuro(value: number | null) {
@@ -109,27 +114,27 @@ function percent(value: number | null) {
 function matchShopProduct(offer: Offer, products: WooProduct[]) {
   const family = familyFromTitle(offer.product_title);
   const weight = weightFromTitle(offer.product_title);
-  if (!family) return null;
-
+  if (!family || family === "citron") return null;
   const candidates = products.filter((product) => familyFromTitle(product.name) === family && product.price != null);
-  if (!candidates.length) return null;
-
-  const exactWeight = candidates.find((product) => weight != null && weightFromTitle(product.name) === weight);
-  if (exactWeight) return exactWeight;
-  if (candidates.length === 1) return candidates[0];
-  return null;
+  const exact = candidates.find((product) => weight != null && weightFromTitle(product.name) === weight);
+  if (exact) return exact;
+  return candidates.length === 1 ? candidates[0] : null;
 }
+
+const familyOrder = ["ricotta-epinards", "roero", "traditionnels", "tagliatelle", "pappardelle", "tagliolini", "gnocchi"];
+const groupLabel: Record<NonNullable<AuditInfo["group"]>, string> = {
+  ravioli: "Ravioli",
+  pasta: "Pasta fresca",
+  gnocchi: "Gnocchi",
+};
 
 export default function Home() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [shopProducts, setShopProducts] = useState<WooProduct[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [updating, setUpdating] = useState(false);
+  const [updatingSku, setUpdatingSku] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [query, setQuery] = useState("");
-  const [selectedSkus, setSelectedSkus] = useState<Set<string>>(new Set());
 
   async function loadData() {
     setLoading(true);
@@ -143,11 +148,8 @@ export default function Home() {
       const shopData = (await shopResponse.json()) as ShopResponse;
       if (!offersResponse.ok) throw new Error(offersData.error || "Impossible de charger les offres Pourdebon");
       if (!shopResponse.ok) throw new Error(shopData.error || "Impossible de charger les prix boutique");
-
-      const rows = Array.isArray(offersData.offers) ? offersData.offers : [];
-      setOffers(rows);
+      setOffers(Array.isArray(offersData.offers) ? offersData.offers : []);
       setShopProducts(Array.isArray(shopData.products) ? shopData.products : []);
-      setTotal(offersData.total_count ?? rows.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur inconnue");
     } finally {
@@ -157,143 +159,102 @@ export default function Home() {
 
   useEffect(() => { loadData(); }, []);
 
-  const auditRows = useMemo<AuditRow[]>(() => {
-    return offers.map((offer) => {
-      const info = auditInfo(offer);
-      const shopProduct = matchShopProduct(offer, shopProducts);
-      const shopWeight = weightFromTitle(shopProduct?.name);
-      const boutiqueTtcPerKg = shopProduct?.price != null && shopWeight ? shopProduct.price / shopWeight : null;
-      const priceTtc = offer.price == null ? null : Number(offer.price);
-      const saleHt = priceTtc != null ? priceTtc / (1 + info.vatRate) : null;
-      const netHt = saleHt != null && info.commissionHtRate != null ? saleHt * (1 - info.commissionHtRate) : null;
-      const netHtPerKg = netHt != null && info.weightKg ? netHt / info.weightKg : null;
-      const boutiqueHtPerKg = boutiqueTtcPerKg != null ? boutiqueTtcPerKg / (1 + info.vatRate) : null;
-      const exactTargetTtc = boutiqueHtPerKg != null && info.weightKg != null && info.commissionHtRate != null
-        ? (boutiqueHtPerKg * info.weightKg / (1 - info.commissionHtRate)) * (1 + info.vatRate)
-        : null;
-      return { offer, info, shopProduct, boutiqueTtcPerKg, exactTargetTtc, targetTtc: roundUpEuro(exactTargetTtc), netHtPerKg, boutiqueHtPerKg };
-    });
-  }, [offers, shopProducts]);
+  const rows = useMemo<AuditRow[]>(() => offers.map((offer) => {
+    const info = auditInfo(offer);
+    if (!info.group || info.family === "citron" || !info.weightKg) return null;
+    const shopProduct = matchShopProduct(offer, shopProducts);
+    const shopWeight = weightFromTitle(shopProduct?.name);
+    const boutiqueTtcPerKg = shopProduct?.price != null && shopWeight ? shopProduct.price / shopWeight : null;
+    const currentTtc = offer.price == null ? null : Number(offer.price);
+    const saleHt = currentTtc != null ? currentTtc / (1 + info.vatRate) : null;
+    const netHt = saleHt != null && info.commissionHtRate != null ? saleHt * (1 - info.commissionHtRate) : null;
+    const netHtPerKg = netHt != null ? netHt / info.weightKg : null;
+    const boutiqueHtPerKg = boutiqueTtcPerKg != null ? boutiqueTtcPerKg / (1 + info.vatRate) : null;
+    const exactTargetTtc = boutiqueHtPerKg != null && info.commissionHtRate != null
+      ? (boutiqueHtPerKg * info.weightKg / (1 - info.commissionHtRate)) * (1 + info.vatRate)
+      : null;
+    return { offer, info, shopProduct, boutiqueTtcPerKg, targetTtc: roundUpEuro(exactTargetTtc), netHtPerKg, boutiqueHtPerKg };
+  }).filter((row): row is AuditRow => row !== null).sort((a, b) => {
+    const fa = familyOrder.indexOf(a.info.family ?? "");
+    const fb = familyOrder.indexOf(b.info.family ?? "");
+    if (fa !== fb) return fa - fb;
+    return (a.info.weightKg ?? 0) - (b.info.weightKg ?? 0);
+  }), [offers, shopProducts]);
 
-  const freshRows = useMemo(() => auditRows.filter((row) => row.info.family != null && row.info.weightKg != null), [auditRows]);
-
-  const filteredRows = useMemo(() => {
-    const q = normalize(query);
-    if (!q) return freshRows;
-    return freshRows.filter((row) => normalize(`${row.offer.product_title} ${row.offer.shop_sku}`).includes(q));
-  }, [freshRows, query]);
-
-  const updateCandidates = useMemo(() => freshRows.filter((row) => {
-    if (!row.offer.shop_sku || row.targetTtc == null || row.offer.price == null) return false;
-    return Math.abs(Number(row.offer.price) - row.targetTtc) > 0.001;
-  }), [freshRows]);
-
-  const selectedUpdates = useMemo(() => updateCandidates
-    .filter((row) => row.offer.shop_sku && selectedSkus.has(row.offer.shop_sku))
-    .map((row) => ({ sku: row.offer.shop_sku as string, price: row.targetTtc as number })),
-  [updateCandidates, selectedSkus]);
-
-  function toggleSku(sku: string) {
-    setSelectedSkus((current) => {
-      const next = new Set(current);
-      if (next.has(sku)) next.delete(sku); else next.add(sku);
-      return next;
-    });
-  }
-
-  async function applySelectedPrices() {
-    if (!selectedUpdates.length) return;
-    setUpdating(true);
+  async function applyOne(row: AuditRow) {
+    const sku = row.offer.shop_sku;
+    if (!sku || row.targetTtc == null) return;
+    setUpdatingSku(sku);
     setError("");
     setMessage("");
     try {
       const response = await fetch("/api/pourdebon/prices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates: selectedUpdates, explicitSelection: true }),
+        body: JSON.stringify({ updates: [{ sku, price: row.targetTtc }], explicitSelection: true }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "La mise à jour a échoué");
-      setMessage(`Import envoyé pour ${selectedUpdates.length} offre(s). Actualisez dans quelques instants pour contrôler les nouveaux prix.`);
-      setSelectedSkus(new Set());
-      setTimeout(() => loadData(), 3000);
+      setMessage(`${row.offer.product_title ?? sku} : import envoyé à ${money(row.targetTtc)}.`);
+      setTimeout(() => loadData(), 2500);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur inconnue");
     } finally {
-      setUpdating(false);
+      setUpdatingSku(null);
     }
   }
 
-  const matchedCount = freshRows.filter((row) => row.shopProduct && row.targetTtc != null).length;
+  const groups: Array<NonNullable<AuditInfo["group"]>> = ["ravioli", "pasta", "gnocchi"];
 
   return (
     <main style={styles.page}>
       <section style={styles.header}>
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
-          <h1 style={styles.title}>Gestion des prix frais</h1>
-          <p style={styles.subtitle}>Comparaison automatique entre Pourdebon et le catalogue live de shop.pastapiemonte.com. Calcul économique en HT avec TVA sur commission récupérable. Toute cible est arrondie à l’euro supérieur.</p>
+          <h1 style={styles.title}>Correction des prix frais</h1>
+          <p style={styles.subtitle}>Le Citron est exclu. On avance dans l’ordre : ravioli, pasta fraîche, gnocchi. Une seule référence est modifiée à la fois.</p>
         </div>
-        <div style={styles.actions}>
-          <button onClick={loadData} disabled={loading || updating} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
-          <button onClick={applySelectedPrices} disabled={loading || updating || selectedUpdates.length === 0} style={styles.button}>
-            {updating ? "Mise à jour…" : `Appliquer sélection (${selectedUpdates.length})`}
-          </button>
-        </div>
-      </section>
-
-      <section style={styles.stats}>
-        <div style={styles.card}><span style={styles.cardLabel}>Offres Pourdebon</span><strong style={styles.cardValue}>{total}</strong></div>
-        <div style={styles.card}><span style={styles.cardLabel}>Produits frais audités</span><strong style={styles.cardValue}>{freshRows.length}</strong></div>
-        <div style={styles.card}><span style={styles.cardLabel}>Correspondances boutique</span><strong style={styles.cardValue}>{matchedCount}</strong></div>
-        <div style={styles.card}><span style={styles.cardLabel}>Prix à corriger</span><strong style={styles.cardValue}>{updateCandidates.length}</strong></div>
+        <button onClick={loadData} disabled={loading || updatingSku !== null} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
       </section>
 
       {message && <section style={styles.success}>{message}</section>}
       {error && <section style={styles.error}>{error}</section>}
 
-      <section style={styles.panel}>
-        <div style={styles.toolbar}>
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Rechercher ravioli, pasta, gnocchi ou SKU…" style={styles.input} />
-          <span style={styles.help}>Coche uniquement les lignes que tu veux réellement modifier.</span>
-        </div>
-        <div style={styles.tableWrap}>
-          <table style={styles.table}>
-            <thead><tr>
-              <th style={styles.th}>OK</th><th style={styles.th}>Produit Pourdebon</th><th style={styles.th}>SKU</th><th style={styles.thRight}>Prix PDB</th><th style={styles.thRight}>Commission HT</th><th style={styles.th}>Référence boutique live</th><th style={styles.thRight}>Boutique €/kg</th><th style={styles.thRight}>Net PDB HT/kg</th><th style={styles.thRight}>Cible PDB</th><th style={styles.th}>Audit</th>
-            </tr></thead>
-            <tbody>
-              {loading ? <tr><td colSpan={10} style={styles.empty}>Chargement des catalogues…</td></tr> : filteredRows.length === 0 ? <tr><td colSpan={10} style={styles.empty}>Aucun produit frais trouvé.</td></tr> : filteredRows.map((row, index) => {
+      {groups.map((group) => {
+        const groupRows = rows.filter((row) => row.info.group === group);
+        if (!groupRows.length) return null;
+        return <section key={group} style={styles.panel}>
+          <div style={styles.sectionTitle}>{groupLabel[group]}</div>
+          <div style={styles.tableWrap}>
+            <table style={styles.table}>
+              <thead><tr>
+                <th style={styles.th}>Produit</th><th style={styles.th}>SKU</th><th style={styles.thRight}>Prix PDB</th><th style={styles.thRight}>Commission HT</th><th style={styles.th}>Référence boutique live</th><th style={styles.thRight}>Boutique €/kg</th><th style={styles.thRight}>Net PDB HT/kg</th><th style={styles.thRight}>Cible</th><th style={styles.th}>Action</th>
+              </tr></thead>
+              <tbody>{groupRows.map((row, index) => {
                 const sku = row.offer.shop_sku;
                 const current = row.offer.price == null ? null : Number(row.offer.price);
-                const canUpdate = Boolean(sku && row.targetTtc != null && current != null && Math.abs(current - row.targetTtc) > 0.001);
-                const gap = row.netHtPerKg != null && row.boutiqueHtPerKg != null ? row.netHtPerKg - row.boutiqueHtPerKg : null;
-                let label = "À vérifier";
-                let badge = styles.badgeNeutral;
-                if (!row.shopProduct) label = "Pas de correspondance boutique";
-                else if (row.info.commissionHtRate == null) label = "Commission à confirmer";
-                else if (gap != null && gap >= 0) { label = "Aligné"; badge = styles.badgeOk; }
-                else if (row.targetTtc != null) { label = `Cible ${money(row.targetTtc)}`; badge = styles.badgeWarn; }
-
+                const changed = current != null && row.targetTtc != null && Math.abs(current - row.targetTtc) > 0.001;
+                const canApply = Boolean(sku && row.shopProduct && row.info.commissionHtRate != null && row.targetTtc != null && changed);
                 return <tr key={`${sku ?? row.offer.product_sku ?? "offer"}-${index}`}>
-                  <td style={styles.td}><input type="checkbox" disabled={!canUpdate} checked={Boolean(sku && selectedSkus.has(sku))} onChange={() => sku && toggleSku(sku)} /></td>
                   <td style={styles.td}><strong>{row.offer.product_title ?? "—"}</strong></td>
                   <td style={styles.td}>{sku ?? "—"}</td>
                   <td style={styles.tdRight}>{money(current)}</td>
                   <td style={styles.tdRight}>{percent(row.info.commissionHtRate)}</td>
-                  <td style={styles.td}>{row.shopProduct?.name ?? "—"}{row.shopProduct?.price != null ? ` · ${money(row.shopProduct.price)}` : ""}</td>
+                  <td style={styles.td}>{row.shopProduct?.name ?? "Non presente su WooCommerce"}{row.shopProduct?.price != null ? ` · ${money(row.shopProduct.price)}` : ""}</td>
                   <td style={styles.tdRight}>{money(row.boutiqueTtcPerKg)}</td>
                   <td style={styles.tdRight}>{money(row.netHtPerKg)}</td>
                   <td style={{ ...styles.tdRight, fontWeight: 800 }}>{money(row.targetTtc)}</td>
-                  <td style={styles.td}><span style={badge}>{label}</span></td>
+                  <td style={styles.td}>
+                    {row.shopProduct == null ? <span style={styles.badgeNeutral}>Ignoré</span> : row.info.commissionHtRate == null ? <span style={styles.badgeNeutral}>Commission à vérifier</span> : !changed ? <span style={styles.badgeOk}>Déjà aligné</span> : <button disabled={!canApply || updatingSku !== null} onClick={() => applyOne(row)} style={styles.button}>{updatingSku === sku ? "Mise à jour…" : "Appliquer"}</button>}
+                  </td>
                 </tr>;
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              })}</tbody>
+            </table>
+          </div>
+        </section>;
+      })}
 
-      <section style={styles.note}><strong>Regola:</strong> il prezzo boutique arriva direttamente da WooCommerce. Il target Pourdebon usa la commissione HT osservata sulle transazioni 31/08–10/09/2026, considera recuperabile l’IVA sulla commissione e viene sempre arrotondato all’euro intero superiore per lasciare margine a cartoni, etichette e preparazione. Nessun prezzo viene modificato senza selezione esplicita della riga.</section>
+      <section style={styles.note}><strong>Regola:</strong> il prezzo boutique arriva dal catalogo WooCommerce live. Il target considera la commissione HT osservata, l’IVA sulla commissione recuperabile e viene arrotondato sempre all’euro superiore. I prodotti assenti da WooCommerce sono semplicemente ignorati.</section>
     </main>
   );
 }
@@ -301,30 +262,21 @@ export default function Home() {
 const styles: Record<string, React.CSSProperties> = {
   page: { minHeight: "100vh", background: "#f6f3ee", color: "#26231f", fontFamily: "Arial, Helvetica, sans-serif", padding: "40px 24px 72px" },
   header: { maxWidth: 1500, margin: "0 auto 24px", display: "flex", justifyContent: "space-between", gap: 24, alignItems: "flex-end", flexWrap: "wrap" },
-  actions: { display: "flex", gap: 10, flexWrap: "wrap" },
   eyebrow: { margin: "0 0 8px", fontSize: 13, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#7a6654" },
   title: { margin: 0, fontSize: "clamp(32px, 5vw, 48px)", lineHeight: 1.05 },
   subtitle: { margin: "12px 0 0", maxWidth: 950, color: "#6e675f", lineHeight: 1.5 },
-  button: { border: 0, borderRadius: 10, background: "#26231f", color: "white", padding: "12px 18px", fontWeight: 700, cursor: "pointer" },
+  button: { border: 0, borderRadius: 9, background: "#26231f", color: "white", padding: "9px 13px", fontWeight: 700, cursor: "pointer" },
   secondaryButton: { border: "1px solid #cfc7bd", borderRadius: 10, background: "white", color: "#26231f", padding: "12px 18px", fontWeight: 700, cursor: "pointer" },
-  stats: { maxWidth: 1500, margin: "0 auto 18px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 },
-  card: { background: "white", border: "1px solid #e5dfd7", borderRadius: 14, padding: 18 },
-  cardLabel: { display: "block", fontSize: 13, color: "#7b746c", marginBottom: 6 },
-  cardValue: { display: "block", fontSize: 28 },
-  panel: { maxWidth: 1500, margin: "0 auto", background: "white", border: "1px solid #e5dfd7", borderRadius: 16, overflow: "hidden" },
-  toolbar: { padding: 16, borderBottom: "1px solid #ece7e1", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" },
-  input: { width: "min(430px, 100%)", border: "1px solid #d8d1c8", borderRadius: 10, padding: "11px 13px", fontSize: 15, outline: "none" },
-  help: { fontSize: 13, color: "#7b746c" },
+  panel: { maxWidth: 1500, margin: "0 auto 18px", background: "white", border: "1px solid #e5dfd7", borderRadius: 16, overflow: "hidden" },
+  sectionTitle: { padding: "16px 18px", fontSize: 20, fontWeight: 800, borderBottom: "1px solid #ece7e1", background: "#faf8f5" },
   tableWrap: { overflowX: "auto" },
-  table: { width: "100%", borderCollapse: "collapse", minWidth: 1500 },
+  table: { width: "100%", borderCollapse: "collapse", minWidth: 1350 },
   th: { textAlign: "left", padding: "13px 10px", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "#7b746c", background: "#faf8f5", borderBottom: "1px solid #ece7e1", whiteSpace: "nowrap" },
   thRight: { textAlign: "right", padding: "13px 10px", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "#7b746c", background: "#faf8f5", borderBottom: "1px solid #ece7e1", whiteSpace: "nowrap" },
   td: { padding: "13px 10px", borderBottom: "1px solid #f0ece7", fontSize: 13, verticalAlign: "middle" },
   tdRight: { padding: "13px 10px", borderBottom: "1px solid #f0ece7", fontSize: 13, verticalAlign: "middle", textAlign: "right", whiteSpace: "nowrap" },
   badgeNeutral: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#f1eee9", fontSize: 11, fontWeight: 700, color: "#655e56" },
   badgeOk: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#e8f5ea", fontSize: 11, fontWeight: 700, color: "#276235" },
-  badgeWarn: { display: "inline-block", padding: "5px 8px", borderRadius: 999, background: "#fff3d6", fontSize: 11, fontWeight: 700, color: "#8a6500" },
-  empty: { padding: 32, textAlign: "center", color: "#7b746c" },
   success: { maxWidth: 1500, margin: "0 auto 16px", padding: 14, borderRadius: 10, background: "#e8f5ea", color: "#276235", border: "1px solid #bcdcc3" },
   error: { maxWidth: 1500, margin: "0 auto 16px", padding: 14, borderRadius: 10, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1" },
   note: { maxWidth: 1500, margin: "16px auto 0", padding: 16, borderRadius: 12, background: "#efeae3", color: "#5f574e", fontSize: 13, lineHeight: 1.55 },
