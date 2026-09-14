@@ -36,6 +36,15 @@ function toAmount(value: string | undefined, minorUnit: number | undefined) {
   return numeric / divisor;
 }
 
+function normalize(value: unknown) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function parentIdFromVariation(product: WooProduct) {
   const href = product._links?.up?.[0]?.href;
   if (!href) return null;
@@ -43,14 +52,29 @@ function parentIdFromVariation(product: WooProduct) {
   return match ? Number(match[1]) : null;
 }
 
+function isFreshPasta400(product: WooProduct, parent?: WooProduct | null) {
+  const source = parent ?? product;
+  const categories = Array.isArray(source.categories)
+    ? source.categories.map((category) => `${category.name ?? ""} ${category.slug ?? ""}`).join(" ")
+    : "";
+  const text = normalize(`${source.name ?? ""} ${source.slug ?? ""} ${source.sku ?? ""} ${categories}`);
+  const isFresh = text.includes("fraiche") || text.includes("frais") || text.includes("retrait");
+  const isPasta = text.includes("tagliatelle") || text.includes("pappardelle") || text.includes("tagliolini") || text.includes("tajarin");
+  const hasExplicitWeight = /\b(400|500|750|1000)\b/.test(text) || /\b1\s*kg\b/.test(text);
+  return isFresh && isPasta && !hasExplicitWeight;
+}
+
 function normalizeProduct(product: WooProduct, parent?: WooProduct | null) {
   const minorUnit = product.prices?.currency_minor_unit ?? parent?.prices?.currency_minor_unit ?? 2;
   const variation = product.variation?.trim() || null;
   const parentName = parent?.name?.trim() || null;
   const isVariation = Boolean(variation) || Boolean(parent);
-  const displayName = isVariation
+  const rawDisplayName = isVariation
     ? [parentName ?? product.name ?? null, variation].filter(Boolean).join(" – ")
     : product.name ?? null;
+  const displayName = rawDisplayName && isFreshPasta400(product, parent)
+    ? `${rawDisplayName} – 400 g`
+    : rawDisplayName;
 
   const categories = Array.isArray(parent?.categories)
     ? parent!.categories!.map((category) => category.name).filter((value): value is string => Boolean(value))
