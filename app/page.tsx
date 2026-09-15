@@ -29,12 +29,16 @@ type WooProduct = {
 type OffersResponse = { offers?: Offer[]; error?: string };
 type ShopResponse = { products?: WooProduct[]; error?: string };
 
+type Group = "ravioli" | "pasta" | "gnocchi" | "risotto" | "sauce";
+
 type AuditInfo = {
   weightKg: number | null;
   commissionHtRate: number | null;
   vatRate: number;
   family: string | null;
-  group: "ravioli" | "pasta" | "gnocchi" | null;
+  group: Group | null;
+  dried: boolean;
+  variant: string | null;
 };
 
 type AuditRow = {
@@ -66,19 +70,52 @@ function isProName(value: string | null | undefined) {
 
 function weightFromTitle(value: string | null | undefined) {
   const t = normalize(value);
-  if (/\b1\s*kg\b/.test(t) || /\b1000\s*g\b/.test(t)) return 1;
+  const kg = t.match(/\b(\d+(?:[.,]\d+)?)\s*kg\b/);
+  if (kg) {
+    const parsed = Number(kg[1].replace(",", "."));
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const grams = t.match(/\b(\d{2,4})\s*(?:g|gr|gramme|grammes)\b/);
+  if (grams) {
+    const parsed = Number(grams[1]);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed / 1000;
+  }
+  if (t.includes("1000")) return 1;
   if (t.includes("750")) return 0.75;
   if (t.includes("500")) return 0.5;
   if (t.includes("400")) return 0.4;
+  if (t.includes("250")) return 0.25;
   return null;
+}
+
+function variantFromText(value: string | null | undefined) {
+  const t = normalize(value);
+  if (t.includes("piment") || t.includes("espelette")) return "piment";
+  if (t.includes("olive")) return "olive";
+  if (t.includes("lavande")) return "lavande";
+  if (t.includes("truffe")) return "truffe";
+  if (t.includes("cepe") || t.includes("porcini")) return "cepes";
+  if (t.includes("chanterelle") || t.includes("girolle")) return "chanterelles";
+  if (t.includes("artichaut") || t.includes("carciof")) return "artichaut";
+  if (t.includes("citron") || t.includes("limone")) return "citron";
+  if (t.includes("tomate") || t.includes("pomodoro")) return "tomate";
+  if (t.includes("nature")) return "nature";
+  return null;
+}
+
+function isDriedText(value: string | null | undefined) {
+  const t = normalize(value);
+  return t.includes("deshydrat") || t.includes("sechee") || t.includes("seche") || t.includes("epicerie") || ["piment", "olive", "lavande"].includes(variantFromText(t) ?? "");
 }
 
 function familyFromTitle(value: string | null | undefined) {
   const t = normalize(value);
-  if (t.includes("citron")) return "citron";
+  if (t.includes("citron") && t.includes("ravioli")) return "citron";
   if (t.includes("ricotta") && (t.includes("epinard") || t.includes("spinaci"))) return "ricotta-epinards";
-  if (t.includes("roero") || t.includes("noisette") || t.includes("tome") || t.includes("toma")) return "roero";
+  if (t.includes("roero") || (t.includes("noisette") && (t.includes("tome") || t.includes("toma")))) return "roero";
   if (t.includes("tradition") || t.includes("agnolotti")) return "traditionnels";
+  if (t.includes("risotto") || t.includes("risotti")) return "risotto";
+  if (t.includes("sauce") || t.includes("sugo") || t.includes("salsa") || t.includes("pesto") || t.includes("condiment")) return "sauce";
   if (t.includes("tagliatelle")) return "tagliatelle";
   if (t.includes("pappardelle")) return "pappardelle";
   if (t.includes("tagliolini") || t.includes("tajarin")) return "tagliolini";
@@ -86,29 +123,35 @@ function familyFromTitle(value: string | null | undefined) {
   return null;
 }
 
-function groupFromFamily(family: string | null): AuditInfo["group"] {
+function groupFromFamily(family: string | null): Group | null {
   if (["ricotta-epinards", "roero", "traditionnels"].includes(family ?? "")) return "ravioli";
   if (["tagliatelle", "pappardelle", "tagliolini"].includes(family ?? "")) return "pasta";
   if (family === "gnocchi") return "gnocchi";
+  if (family === "risotto") return "risotto";
+  if (family === "sauce") return "sauce";
   return null;
 }
 
 function auditInfo(offer: Offer): AuditInfo {
-  const title = normalize(offer.product_title);
-  const family = familyFromTitle(offer.product_title);
-  const weightKg = weightFromTitle(offer.product_title);
+  const title = normalize(`${offer.product_title ?? ""} ${offer.shop_sku ?? ""}`);
+  const family = familyFromTitle(title);
+  const group = groupFromFamily(family);
+  const dried = group === "pasta" && isDriedText(title);
+  let weightKg = weightFromTitle(title);
+  if (!weightKg && group === "pasta" && !dried) weightKg = 0.4;
+  const variant = variantFromText(title);
   let commissionHtRate: number | null = null;
 
-  if (family === "ricotta-epinards" && title.includes("500")) commissionHtRate = 4.13 / 13.27;
-  else if (family === "ricotta-epinards" && title.includes("750")) commissionHtRate = 5.99 / 19.81;
-  else if (family === "roero" && title.includes("500")) commissionHtRate = 4.37 / 14.12;
-  else if (family === "roero" && title.includes("750")) commissionHtRate = 6.56 / 21.8;
-  else if (family === "traditionnels" && title.includes("500")) commissionHtRate = 4.91 / 16.02;
-  else if (family === "traditionnels" && title.includes("750")) commissionHtRate = 7.07 / 23.6;
-  else if (["tagliatelle", "pappardelle", "tagliolini"].includes(family ?? "") && title.includes("400")) commissionHtRate = 1.94 / 5.59;
-  else if (family === "gnocchi" && title.includes("500")) commissionHtRate = 2.75 / 8.44;
+  if (family === "ricotta-epinards" && weightKg === 0.5) commissionHtRate = 4.13 / 13.27;
+  else if (family === "ricotta-epinards" && weightKg === 0.75) commissionHtRate = 5.99 / 19.81;
+  else if (family === "roero" && weightKg === 0.5) commissionHtRate = 4.37 / 14.12;
+  else if (family === "roero" && weightKg === 0.75) commissionHtRate = 6.56 / 21.8;
+  else if (family === "traditionnels" && weightKg === 0.5) commissionHtRate = 4.91 / 16.02;
+  else if (family === "traditionnels" && weightKg === 0.75) commissionHtRate = 7.07 / 23.6;
+  else if (group === "pasta" && !dried && weightKg === 0.4) commissionHtRate = 1.94 / 5.59;
+  else if (family === "gnocchi" && weightKg === 0.5) commissionHtRate = 2.75 / 8.44;
 
-  return { weightKg, commissionHtRate, vatRate: 0.055, family, group: groupFromFamily(family) };
+  return { weightKg, commissionHtRate, vatRate: 0.055, family, group, dried, variant };
 }
 
 function roundUpEuro(value: number | null) {
@@ -133,41 +176,58 @@ function wooText(product: WooProduct) {
   return normalize(`${product.name ?? ""} ${product.parent_name ?? ""} ${product.variation ?? ""} ${product.sku ?? ""} ${(product.categories ?? []).join(" ")}`);
 }
 
-function isFreshWooProduct(product: WooProduct) {
-  const t = wooText(product);
-  if (t.includes("deshydrat") || t.includes("sechee") || t.includes("seche") || t.includes("epicerie")) return false;
-  return t.includes("fraiche") || t.includes("frais") || t.includes("ravioli") || t.includes("gnocchi") || t.includes("retrait");
+function tokenScore(a: string, b: string) {
+  const stop = new Set(["bio", "aux", "avec", "pour", "les", "des", "the", "and", "frais", "fraiche", "fraiches", "artisanaux", "artisanal", "poids", "grammes", "gramme", "pasta", "piemonte"]);
+  const left = new Set(a.split(" ").filter((token) => token.length >= 4 && !stop.has(token) && !/^\d+$/.test(token)));
+  const right = new Set(b.split(" ").filter((token) => token.length >= 4 && !stop.has(token) && !/^\d+$/.test(token)));
+  let score = 0;
+  for (const token of left) if (right.has(token)) score += 1;
+  return score;
 }
 
-function matchShopProduct(offer: Offer, products: WooProduct[]) {
-  const family = familyFromTitle(offer.product_title);
-  const weight = weightFromTitle(offer.product_title);
-  if (!family || family === "citron" || !weight || isProName(offer.product_title)) return null;
+function matchShopProduct(offer: Offer, info: AuditInfo, products: WooProduct[]) {
+  if (!info.family || info.family === "citron" || !info.group || isProName(offer.product_title) || isProName(offer.shop_sku)) return null;
 
+  const offerText = normalize(`${offer.product_title ?? ""} ${offer.shop_sku ?? ""}`);
   let candidates = products.filter((product) => {
     if (isProName(product.name) || isProName(product.sku) || product.price == null) return false;
-    return familyFromTitle(wooText(product)) === family;
+    return familyFromTitle(wooText(product)) === info.family;
   });
 
-  const fresh = candidates.filter(isFreshWooProduct);
-  if (fresh.length) candidates = fresh;
+  if (info.group === "pasta") {
+    const sameState = candidates.filter((product) => isDriedText(wooText(product)) === info.dried);
+    if (sameState.length) candidates = sameState;
+  }
 
-  const exactWeight = candidates.filter((product) => weightFromTitle(wooText(product)) === weight);
-  const exactVariations = exactWeight.filter((product) => product.is_variation === true);
-  if (exactVariations.length === 1) return exactVariations[0];
-  if (exactWeight.length === 1) return exactWeight[0];
+  if (info.variant) {
+    const sameVariant = candidates.filter((product) => variantFromText(wooText(product)) === info.variant);
+    if (sameVariant.length) candidates = sameVariant;
+  }
 
-  const skuWeighted = exactWeight.filter((product) => weightFromTitle(product.sku) === weight);
-  if (skuWeighted.length === 1) return skuWeighted[0];
+  if (info.weightKg) {
+    const sameWeight = candidates.filter((product) => weightFromTitle(wooText(product)) === info.weightKg);
+    if (sameWeight.length) candidates = sameWeight;
+  }
+
+  const variations = candidates.filter((product) => product.is_variation === true);
+  if (variations.length === 1) return variations[0];
+  if (candidates.length === 1) return candidates[0];
+
+  const scored = candidates
+    .map((product) => ({ product, score: tokenScore(offerText, wooText(product)) }))
+    .sort((a, b) => b.score - a.score);
+  if (scored.length && scored[0].score >= 2 && (scored.length === 1 || scored[0].score > scored[1].score)) return scored[0].product;
 
   return null;
 }
 
-const familyOrder = ["ricotta-epinards", "roero", "traditionnels", "tagliatelle", "pappardelle", "tagliolini", "gnocchi"];
-const groupLabel: Record<NonNullable<AuditInfo["group"]>, string> = {
+const familyOrder = ["ricotta-epinards", "roero", "traditionnels", "tagliatelle", "pappardelle", "tagliolini", "gnocchi", "risotto", "sauce"];
+const groupLabel: Record<Group, string> = {
   ravioli: "Ravioli",
-  pasta: "Pasta fresca",
+  pasta: "Pasta",
   gnocchi: "Gnocchi",
+  risotto: "Risotti",
+  sauce: "Sughi & condimenti",
 };
 
 export default function Home() {
@@ -202,28 +262,31 @@ export default function Home() {
   useEffect(() => { loadData(); }, []);
 
   const rows = useMemo<AuditRow[]>(() => offers.map((offer) => {
-    if (isProName(offer.product_title)) return null;
+    if (isProName(offer.product_title) || isProName(offer.shop_sku)) return null;
     const info = auditInfo(offer);
-    if (!info.group || info.family === "citron" || !info.weightKg) return null;
+    if (!info.group || info.family === "citron") return null;
 
-    const shopProduct = matchShopProduct(offer, shopProducts);
+    const shopProduct = matchShopProduct(offer, info, shopProducts);
     const shopWeight = shopProduct ? weightFromTitle(wooText(shopProduct)) : null;
+    const effectiveWeight = info.weightKg ?? shopWeight;
+    if (!effectiveWeight) return null;
+
     const boutiquePackTtc = shopProduct?.price ?? null;
     const boutiqueTtcPerKg = boutiquePackTtc != null && shopWeight ? boutiquePackTtc / shopWeight : null;
     const currentPdbTtc = offer.price == null ? null : Number(offer.price);
     const saleHt = currentPdbTtc != null ? currentPdbTtc / (1 + info.vatRate) : null;
     const netPdbHtPack = saleHt != null && info.commissionHtRate != null ? saleHt * (1 - info.commissionHtRate) : null;
-    const netPdbHtPerKg = netPdbHtPack != null ? netPdbHtPack / info.weightKg : null;
+    const netPdbHtPerKg = netPdbHtPack != null && effectiveWeight ? netPdbHtPack / effectiveWeight : null;
     const boutiqueHtPerKg = boutiqueTtcPerKg != null ? boutiqueTtcPerKg / (1 + info.vatRate) : null;
-    const exactTargetTtc = boutiqueHtPerKg != null && info.commissionHtRate != null
-      ? (boutiqueHtPerKg * info.weightKg / (1 - info.commissionHtRate)) * (1 + info.vatRate)
+    const exactTargetTtc = boutiqueHtPerKg != null && info.commissionHtRate != null && effectiveWeight
+      ? (boutiqueHtPerKg * effectiveWeight / (1 - info.commissionHtRate)) * (1 + info.vatRate)
       : null;
     const targetTtc = roundUpEuro(exactTargetTtc);
     const differenceTtc = targetTtc != null && currentPdbTtc != null ? targetTtc - currentPdbTtc : null;
 
     return {
       offer,
-      info,
+      info: { ...info, weightKg: effectiveWeight },
       shopProduct,
       boutiquePackTtc,
       boutiqueTtcPerKg,
@@ -238,7 +301,7 @@ export default function Home() {
     const fa = familyOrder.indexOf(a.info.family ?? "");
     const fb = familyOrder.indexOf(b.info.family ?? "");
     if (fa !== fb) return fa - fb;
-    return (a.info.weightKg ?? 0) - (b.info.weightKg ?? 0);
+    return (a.offer.product_title ?? "").localeCompare(b.offer.product_title ?? "");
   }), [offers, shopProducts]);
 
   async function applyOne(row: AuditRow) {
@@ -264,15 +327,15 @@ export default function Home() {
     }
   }
 
-  const groups: Array<NonNullable<AuditInfo["group"]>> = ["ravioli", "pasta", "gnocchi"];
+  const groups: Group[] = ["ravioli", "pasta", "gnocchi", "risotto", "sauce"];
 
   return (
     <main style={styles.page}>
       <section style={styles.header}>
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
-          <h1 style={styles.title}>Audit des prix frais</h1>
-          <p style={styles.subtitle}>Citron et références PRO exclus. Chaque valeur indique clairement si elle est TTC ou HT, par confezione ou par kg.</p>
+          <h1 style={styles.title}>Audit prezzi catalogo</h1>
+          <p style={styles.subtitle}>Citron e referenze PRO esclusi. Pasta fresca e secca sono nello stesso blocco. Risotti e sughi vengono letti dallo stesso catalogo WooCommerce.</p>
         </div>
         <button onClick={loadData} disabled={loading || updatingSku !== null} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
       </section>
@@ -299,7 +362,7 @@ export default function Home() {
                 <div style={styles.cardHeader}>
                   <div>
                     <div style={styles.productName}>{row.offer.product_title ?? "—"}</div>
-                    <div style={styles.meta}>SKU Pourdebon: <strong>{sku ?? "—"}</strong> · Poids détecté: <strong>{row.info.weightKg ? `${row.info.weightKg * 1000} g` : "—"}</strong></div>
+                    <div style={styles.meta}>SKU Pourdebon: <strong>{sku ?? "—"}</strong> · Poids détecté: <strong>{row.info.weightKg ? `${Math.round(row.info.weightKg * 1000)} g` : "—"}</strong></div>
                     <div style={styles.source}>WooCommerce: {sourceLabel}</div>
                   </div>
                   <div>
@@ -327,7 +390,7 @@ export default function Home() {
         </section>;
       })}
 
-      <section style={styles.note}><strong>Come leggere:</strong> “Boutique TTC/kg” serve solo per confrontare il prezzo al kg. “Net PDB HT/kg” è invece ciò che resta economicamente dopo IVA prodotto e commissione HT: non va confrontato direttamente con un valore TTC. Il prezzo da applicare è sempre il “Target arrotondato TTC”.</section>
+      <section style={styles.note}><strong>Come leggere:</strong> “Boutique TTC/kg” serve solo per confrontare il prezzo al kg. “Net PDB HT/kg” è ciò che resta economicamente dopo IVA prodotto e commissione HT. Se la commissione della referenza non è ancora verificata, il pannello mostra prezzo e abbinamento ma non inventa il target.</section>
     </main>
   );
 }
