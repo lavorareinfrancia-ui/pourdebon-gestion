@@ -26,6 +26,11 @@ function isPro(value: unknown) {
   return /(^|\s)pro(\s|$)/i.test(normalize(value));
 }
 
+function isProSku(value: unknown) {
+  const raw = String(value ?? "").toUpperCase().replace(/\s+/g, "");
+  return /(?:^|[-_])PRO(?:$|[-_]|\d|1KG|1000|750)/.test(raw) || /PRO1KG|PRO1000|PRO750/.test(raw);
+}
+
 function isKnownRavioliFamily(offer: RawOffer) {
   const text = normalize(`${offer.product_title ?? ""} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`);
   return [
@@ -45,12 +50,15 @@ function isKnownRavioliFamily(offer: RawOffer) {
 function isEligible750(offer: RawOffer) {
   const title = normalize(offer.product_title);
   const sku = String(offer.shop_sku ?? "");
-  const allText = `${offer.product_title ?? ""} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`;
+  const productSku = String(offer.product_sku ?? "");
+  const allText = `${offer.product_title ?? ""} ${sku} ${productSku}`;
 
   return (
     /1\s*kg/i.test(sku) &&
     !title.includes("citron") &&
     !isPro(allText) &&
+    !isProSku(sku) &&
+    !isProSku(productSku) &&
     isKnownRavioliFamily(offer)
   );
 }
