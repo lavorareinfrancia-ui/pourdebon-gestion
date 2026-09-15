@@ -26,14 +26,32 @@ function isPro(value: unknown) {
   return /(^|\s)pro(\s|$)/i.test(normalize(value));
 }
 
+function isKnownRavioliFamily(offer: RawOffer) {
+  const text = normalize(`${offer.product_title ?? ""} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`);
+  return [
+    "ravioli",
+    "agnolotti",
+    "piemont",
+    "ricotta",
+    "epinard",
+    "roero",
+    "noisette",
+    "tome",
+    "toma",
+    "tradition",
+  ].some((token) => text.includes(token));
+}
+
 function isEligible750(offer: RawOffer) {
   const title = normalize(offer.product_title);
   const sku = String(offer.shop_sku ?? "");
+  const allText = `${offer.product_title ?? ""} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`;
+
   return (
-    title.includes("750") &&
+    /1\s*kg/i.test(sku) &&
     !title.includes("citron") &&
-    !isPro(offer.product_title) &&
-    /1\s*kg/i.test(sku)
+    !isPro(allText) &&
+    isKnownRavioliFamily(offer)
   );
 }
 
@@ -67,11 +85,7 @@ function getProductReference(offer: RawOffer) {
   }
 
   const productSku = String(offer.product_sku ?? "").trim();
-  if (productSku) {
-    // Standard Mirakl mapping for an offer attached to a product already created by the same seller.
-    return { type: "SHOP_SKU", value: productSku };
-  }
-
+  if (productSku) return { type: "SHOP_SKU", value: productSku };
   return null;
 }
 
@@ -96,6 +110,23 @@ async function miraklFetch(path: string, init?: RequestInit) {
   return { response, payload };
 }
 
+async function getAllOffers() {
+  const all: RawOffer[] = [];
+  const max = 100;
+  let offset = 0;
+
+  for (let page = 0; page < 50; page += 1) {
+    const { response, payload } = await miraklFetch(`/api/offers?max=${max}&offset=${offset}`);
+    if (!response.ok) throw new Error(`Lecture Mirakl impossible (${response.status})`);
+    const batch = Array.isArray(payload?.offers) ? payload.offers as RawOffer[] : [];
+    all.push(...batch);
+    if (batch.length < max) break;
+    offset += max;
+  }
+
+  return all;
+}
+
 async function getOfferBySku(sku: string) {
   const { response, payload } = await miraklFetch(`/api/offers?sku=${encodeURIComponent(sku)}&max=10&offset=0`);
   if (!response.ok) throw new Error(`Lecture Mirakl impossible (${response.status})`);
@@ -107,23 +138,31 @@ async function getOfferBySku(sku: string) {
 
 export async function GET() {
   try {
-    const { response, payload } = await miraklFetch("/api/offers?max=100&offset=0");
-    if (!response.ok) {
-      return NextResponse.json({ error: "Lecture Mirakl impossible", details: payload }, { status: 502 });
-    }
+    const offers = await getAllOffers();
+    const bySku = new Map(offers.map((offer) => [String(offer.shop_sku ?? ""), offer]));
 
-    const offers = Array.isArray(payload?.offers) ? payload.offers : [];
-    const candidates = offers.filter(isEligible750).map((offer: RawOffer) => ({
-      title: offer.product_title ?? null,
-      old_sku: offer.shop_sku ?? null,
-      new_sku: suggestedSku(String(offer.shop_sku ?? "")),
-      product_sku: offer.product_sku ?? null,
-      price: offer.price ?? null,
-      quantity: offer.quantity ?? null,
-      state_code: offer.state_code ?? null,
-    }));
+    const candidates = offers
+      .filter(isEligible750)
+      .map((offer: RawOffer) => {
+        const oldSku = String(offer.shop_sku ?? "");
+        const newSku = suggestedSku(oldSku);
+        const created = bySku.get(newSku) ?? null;
+        return {
+          title: offer.product_title ?? null,
+          old_sku: oldSku || null,
+          new_sku: newSku || null,
+          product_sku: offer.product_sku ?? null,
+          price: offer.price ?? null,
+          quantity: offer.quantity ?? null,
+          state_code: offer.state_code ?? null,
+          new_exists: Boolean(created),
+          new_price: created?.price ?? null,
+          new_quantity: created?.quantity ?? null,
+          new_state_code: created?.state_code ?? null,
+        };
+      });
 
-    return NextResponse.json({ candidates });
+    return NextResponse.json({ candidates, offer_count: offers.length });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Erreur inconnue" }, { status: 500 });
   }
