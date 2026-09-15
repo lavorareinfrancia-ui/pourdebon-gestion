@@ -56,7 +56,11 @@ function classify(value: string | null | undefined): Group | null {
 }
 
 function tokenScore(a: string, b: string) {
-  const stop = new Set(["bio", "aux", "avec", "pour", "les", "des", "the", "and", "pasta", "piemonte", "poids", "grammes", "gramme", "frais", "fraiche", "fraiches", "seche", "sechee", "deshydratee", "deshydrates"]);
+  const stop = new Set([
+    "bio", "aux", "avec", "pour", "les", "des", "the", "and", "pasta", "piemonte", "poids", "grammes", "gramme",
+    "frais", "fraiche", "fraiches", "seche", "sechee", "deshydratee", "deshydrates",
+    "sauce", "sugo", "salsa", "pesto", "condiment", "coulis", "ragu", "artisanale", "artisanal", "italienne", "italien",
+  ]);
   const left = new Set(normalize(a).split(" ").filter((x) => x.length >= 4 && !stop.has(x) && !/^\d+$/.test(x)));
   const right = new Set(normalize(b).split(" ").filter((x) => x.length >= 4 && !stop.has(x) && !/^\d+$/.test(x)));
   let score = 0;
@@ -70,15 +74,27 @@ function wooText(p: WooProduct) {
 
 function findWoo(offer: Offer, products: WooProduct[], group: Group) {
   const title = `${offer.product_title ?? ""} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`;
-  const candidates = products
-    .filter((p) => !isPro(p.name) && !isPro(p.sku) && p.price != null && classify(wooText(p)) === group)
+  const offerSku = normalize(offer.shop_sku);
+
+  const eligible = products.filter((p) => !isPro(p.name) && !isPro(p.sku) && p.price != null && classify(wooText(p)) === group);
+
+  if (offerSku) {
+    const exactSku = eligible.filter((p) => normalize(p.sku) === offerSku);
+    if (exactSku.length === 1) return exactSku[0];
+  }
+
+  const candidates = eligible
     .map((p) => ({ p, score: tokenScore(title, wooText(p)) }))
     .sort((a, b) => b.score - a.score);
 
   if (!candidates.length) return null;
-  if (candidates.length === 1) return candidates[0].p;
-  if (candidates[0].score > 0 && candidates[0].score > candidates[1].score) return candidates[0].p;
-  return null;
+
+  const best = candidates[0];
+  const second = candidates[1];
+  if (best.score <= 0) return null;
+  if (second && best.score <= second.score) return null;
+
+  return best.p;
 }
 
 function money(value: number | null) {
