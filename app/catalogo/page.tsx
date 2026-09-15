@@ -42,13 +42,15 @@ function normalize(value: string | null | undefined) {
 }
 
 function isPro(value: string | null | undefined) {
-  return /(^|\s)pro(\s|$)/i.test(normalize(value));
+  const raw = String(value ?? "").toLowerCase();
+  const t = normalize(value);
+  return /(^|\s)pro(\s|$)/i.test(t) || /pro\s*(?:1\s*kg|1000|750|500|400)/i.test(raw) || /(?:1\s*kg|1000|750|500|400)\s*pro/i.test(raw);
 }
 
 function classify(value: string | null | undefined): Group | null {
   const t = normalize(value);
   if (t.includes("risotto") || t.includes("risotti")) return "risotto";
-  if (t.includes("sauce") || t.includes("sugo") || t.includes("salsa") || t.includes("pesto") || t.includes("condiment")) return "sauce";
+  if (t.includes("sauce") || t.includes("sugo") || t.includes("salsa") || t.includes("pesto") || t.includes("condiment") || t.includes("coulis") || t.includes("ragu")) return "sauce";
   if (t.includes("tagliatelle") || t.includes("pappardelle") || t.includes("tagliolini") || t.includes("tajarin")) return "pasta";
   return null;
 }
@@ -67,7 +69,7 @@ function wooText(p: WooProduct) {
 }
 
 function findWoo(offer: Offer, products: WooProduct[], group: Group) {
-  const title = `${offer.product_title ?? ""} ${offer.shop_sku ?? ""}`;
+  const title = `${offer.product_title ?? ""} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`;
   const candidates = products
     .filter((p) => !isPro(p.name) && !isPro(p.sku) && p.price != null && classify(wooText(p)) === group)
     .map((p) => ({ p, score: tokenScore(title, wooText(p)) }))
@@ -83,6 +85,20 @@ function money(value: number | null) {
   return value == null || !Number.isFinite(value) ? "—" : `${value.toFixed(2)} €`;
 }
 
+async function loadAllOffers() {
+  const all: Offer[] = [];
+  const max = 100;
+  for (let offset = 0; offset < 5000; offset += max) {
+    const response = await fetch(`/api/pourdebon/offers?max=${max}&offset=${offset}`, { cache: "no-store" });
+    const data = (await response.json()) as OffersResponse;
+    if (!response.ok) throw new Error(data.error || "Erreur Pourdebon");
+    const batch = Array.isArray(data.offers) ? data.offers : [];
+    all.push(...batch);
+    if (batch.length < max) break;
+  }
+  return all;
+}
+
 export default function CatalogoPage() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [products, setProducts] = useState<WooProduct[]>([]);
@@ -93,15 +109,13 @@ export default function CatalogoPage() {
     setLoading(true);
     setError("");
     try {
-      const [a, b] = await Promise.all([
-        fetch("/api/pourdebon/offers?max=100&offset=0", { cache: "no-store" }),
+      const [allOffers, b] = await Promise.all([
+        loadAllOffers(),
         fetch("/api/shop/products", { cache: "no-store" }),
       ]);
-      const ad = (await a.json()) as OffersResponse;
       const bd = (await b.json()) as ShopResponse;
-      if (!a.ok) throw new Error(ad.error || "Erreur Pourdebon");
       if (!b.ok) throw new Error(bd.error || "Erreur WooCommerce");
-      setOffers(Array.isArray(ad.offers) ? ad.offers : []);
+      setOffers(allOffers);
       setProducts(Array.isArray(bd.products) ? bd.products : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur inconnue");
@@ -115,8 +129,9 @@ export default function CatalogoPage() {
   const rows = useMemo<Row[]>(() => {
     const result: Row[] = [];
     for (const offer of offers) {
-      if (isPro(offer.product_title) || isPro(offer.shop_sku)) continue;
-      const group = classify(`${offer.product_title ?? ""} ${offer.shop_sku ?? ""}`);
+      const allText = `${offer.product_title ?? ""} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`;
+      if (isPro(allText)) continue;
+      const group = classify(allText);
       if (!group) continue;
       result.push({ offer, group, woo: findWoo(offer, products, group) });
     }
@@ -135,7 +150,7 @@ export default function CatalogoPage() {
         <div>
           <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "#7a6654" }}>Pasta Piemonte · Pourdebon</div>
           <h1 style={{ margin: "7px 0 0", fontSize: 36 }}>Catalogo prezzi</h1>
-          <p style={{ margin: "9px 0 0", color: "#6e675f", fontSize: 14 }}>Pasta fresca e secca, risotti e sughi. Referenze PRO escluse. Il prezzo boutique arriva da WooCommerce; se il match non è certo, resta “Da associare”.</p>
+          <p style={{ margin: "9px 0 0", color: "#6e675f", fontSize: 14 }}>Pasta fresca e secca, risotti e sughi. Tutte le pagine del catalogo Pourdebon vengono lette; referenze PRO escluse anche quando “PRO” è incorporato nello SKU.</p>
         </div>
         <button onClick={load} disabled={loading} style={{ border: "1px solid #cfc7bd", borderRadius: 9, background: "white", padding: "10px 15px", fontWeight: 700 }}>{loading ? "Aggiornamento…" : "Aggiorna"}</button>
       </section>
