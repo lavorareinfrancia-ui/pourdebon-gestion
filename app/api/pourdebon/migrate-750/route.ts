@@ -33,18 +33,8 @@ function isProSku(value: unknown) {
 
 function isKnownRavioliFamily(offer: RawOffer) {
   const text = normalize(`${offer.product_title ?? ""} ${offer.shop_sku ?? ""} ${offer.product_sku ?? ""}`);
-  return [
-    "ravioli",
-    "agnolotti",
-    "piemont",
-    "ricotta",
-    "epinard",
-    "roero",
-    "noisette",
-    "tome",
-    "toma",
-    "tradition",
-  ].some((token) => text.includes(token));
+  return ["ravioli", "agnolotti", "piemont", "ricotta", "epinard", "roero", "noisette", "tome", "toma", "tradition"]
+    .some((token) => text.includes(token));
 }
 
 function isEligible750(offer: RawOffer) {
@@ -71,12 +61,16 @@ function suggestedSku(oldSku: string) {
     .replace(/^-|-$/g, "");
 }
 
+function csvCell(value: unknown) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
+}
+
 function getProductReference(offer: RawOffer) {
   const references = Array.isArray(offer.product_references)
     ? (offer.product_references as ProductReference[])
     : [];
 
-  const priority = ["SHOP_SKU", "EAN", "GTIN", "UPC", "ISBN"];
+  const priority = ["EAN", "GTIN", "UPC", "ISBN", "SHOP_SKU", "SKU"];
 
   for (const wanted of priority) {
     const ref = references.find((item) => {
@@ -93,7 +87,7 @@ function getProductReference(offer: RawOffer) {
   }
 
   const productSku = String(offer.product_sku ?? "").trim();
-  if (productSku) return { type: "SHOP_SKU", value: productSku };
+  if (productSku) return { type: "SKU", value: productSku };
   return null;
 }
 
@@ -115,7 +109,7 @@ async function miraklFetch(path: string, init?: RequestInit) {
   const text = await response.text();
   let payload: any = null;
   try { payload = text ? JSON.parse(text) : null; } catch { payload = { raw: text }; }
-  return { response, payload };
+  return { response, payload, text };
 }
 
 async function getAllOffers() {
@@ -131,7 +125,6 @@ async function getAllOffers() {
     if (batch.length < max) break;
     offset += max;
   }
-
   return all;
 }
 
@@ -142,6 +135,36 @@ async function getOfferBySku(sku: string) {
   const exact = offers.filter((offer: RawOffer) => String(offer.shop_sku ?? "") === sku);
   if (exact.length !== 1) throw new Error(`SKU source non univoque: ${sku}`);
   return exact[0] as RawOffer;
+}
+
+async function findOfferBySku(sku: string) {
+  const { response, payload } = await miraklFetch(`/api/offers?sku=${encodeURIComponent(sku)}&max=10&offset=0`);
+  if (!response.ok) return null;
+  const offers = Array.isArray(payload?.offers) ? payload.offers : [];
+  return offers.find((offer: RawOffer) => String(offer.shop_sku ?? "") === sku) ?? null;
+}
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getImportStatus(importId: string) {
+  const { response, payload } = await miraklFetch(`/api/offers/imports/${encodeURIComponent(importId)}`);
+  if (!response.ok) return null;
+  return payload;
+}
+
+async function getImportErrorReport(importId: string) {
+  const apiKey = process.env.POURDEBON_API_KEY;
+  const baseUrl = process.env.POURDEBON_BASE_URL;
+  if (!apiKey || !baseUrl) return null;
+  const url = new URL(`/api/offers/imports/${encodeURIComponent(importId)}/error_report`, baseUrl);
+  const response = await fetch(url, {
+    headers: { Authorization: apiKey, Accept: "application/octet-stream" },
+    cache: "no-store",
+  });
+  if (!response.ok) return null;
+  return (await response.text()).slice(0, 12000);
 }
 
 export async function GET() {
@@ -182,9 +205,7 @@ export async function POST(request: NextRequest) {
     const oldSku = String(body?.oldSku ?? "").trim();
     const newSku = String(body?.newSku ?? "").trim();
 
-    if (!oldSku || !newSku) {
-      return NextResponse.json({ error: "oldSku et newSku sont obligatoires" }, { status: 400 });
-    }
+    if (!oldSku || !newSku) return NextResponse.json({ error: "oldSku et newSku sont obligatoires" }, { status: 400 });
     if (!/750/i.test(newSku) || /1\s*kg/i.test(newSku)) {
       return NextResponse.json({ error: "Le nouveau SKU doit clairement identifier 750 g" }, { status: 400 });
     }
@@ -194,9 +215,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Cette offre n'est pas une référence ravioli 750 g migrable" }, { status: 400 });
     }
 
-    const existing = await miraklFetch(`/api/offers?sku=${encodeURIComponent(newSku)}&max=10&offset=0`);
-    const existingOffers = Array.isArray(existing.payload?.offers) ? existing.payload.offers : [];
-    if (existingOffers.some((offer: RawOffer) => String(offer.shop_sku ?? "") === newSku)) {
+    if (await findOfferBySku(newSku)) {
       return NextResponse.json({ error: `Le SKU ${newSku} existe déjà` }, { status: 409 });
     }
 
@@ -209,48 +228,92 @@ export async function POST(request: NextRequest) {
       ? oldOffer.logistic_class?.code
       : oldOffer.logistic_class;
 
-    const clone = {
-      shop_sku: newSku,
-      product_id: productRef.value,
-      product_id_type: productRef.type,
-      description: oldOffer.description ?? "",
-      internal_description: oldOffer.internal_description ?? "",
-      price: Number(oldOffer.price ?? 0),
-      quantity: Number(oldOffer.quantity ?? 0),
-      min_quantity_alert: Number(oldOffer.min_quantity_alert ?? 0),
-      state_code: String(oldOffer.state_code ?? "11"),
-      leadtime_to_ship: Number(oldOffer.leadtime_to_ship ?? 0),
-      min_order_quantity: Number(oldOffer.min_order_quantity ?? 1),
-      max_order_quantity: Number(oldOffer.max_order_quantity ?? 0),
-      package_quantity: Number(oldOffer.package_quantity ?? 1),
-      price_additional_info: oldOffer.price_additional_info ?? "",
-      product_tax_code: oldOffer.product_tax_code ?? "",
-      logistic_class: logisticClass ?? "",
-      allow_quote_requests: Boolean(oldOffer.allow_quote_requests ?? false),
-      update_delete: "update",
-    };
+    const header = [
+      "sku", "product-id", "product-id-type", "description", "internal-description",
+      "price", "quantity", "min-quantity-alert", "state", "logistic-class", "update-delete"
+    ].map(csvCell).join(";");
 
-    const { response, payload } = await miraklFetch("/api/offers", {
+    const row = [
+      newSku,
+      productRef.value,
+      productRef.type,
+      oldOffer.description ?? "",
+      oldOffer.internal_description ?? "",
+      Number(oldOffer.price ?? 0).toFixed(2),
+      Number(oldOffer.quantity ?? 0),
+      Number(oldOffer.min_quantity_alert ?? 0),
+      String(oldOffer.state_code ?? "11"),
+      logisticClass ?? "",
+      "update",
+    ].map(csvCell).join(";");
+
+    const csv = `${header}\n${row}`;
+    const form = new FormData();
+    form.append("file", new Blob([csv], { type: "text/csv;charset=utf-8" }), "ravioli-750.csv");
+    form.append("import_mode", "NORMAL");
+
+    const { response, payload } = await miraklFetch("/api/offers/imports", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ offers: [clone] }),
+      body: form,
     });
 
     if (!response.ok) {
       return NextResponse.json({
-        error: "Création de la nouvelle offre refusée par Mirakl",
+        error: "Import OF01 refusé par Mirakl",
         upstreamStatus: response.status,
         details: payload,
       }, { status: 502 });
     }
 
+    const importId = String(payload?.import_id ?? payload?.import?.import_id ?? "").trim();
+    if (!importId) {
+      return NextResponse.json({ error: "Mirakl a accepté l'envoi mais n'a pas retourné d'import_id", details: payload }, { status: 502 });
+    }
+
+    let tracking: any = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await sleep(800);
+      tracking = await getImportStatus(importId);
+      const status = String(tracking?.status ?? tracking?.import?.status ?? "").toUpperCase();
+      if (status === "COMPLETE" || status === "FAILED") break;
+    }
+
+    const info = tracking?.import ?? tracking ?? {};
+    const status = String(info?.status ?? "PENDING").toUpperCase();
+    const linesError = Number(info?.lines_in_error ?? 0);
+    const linesSuccess = Number(info?.lines_in_success ?? 0);
+    const inserted = Number(info?.offer_inserted ?? 0);
+    const hasErrorReport = Boolean(info?.error_report ?? info?.has_error_report ?? linesError > 0);
+    const errorReport = hasErrorReport ? await getImportErrorReport(importId) : null;
+
+    if (status === "FAILED" || linesError > 0) {
+      return NextResponse.json({
+        error: "Mirakl a traité l'import mais la création a échoué",
+        import_id: importId,
+        import_status: status,
+        lines_in_error: linesError,
+        lines_in_success: linesSuccess,
+        offer_inserted: inserted,
+        error_report: errorReport,
+      }, { status: 409 });
+    }
+
+    const created = await findOfferBySku(newSku);
+
     return NextResponse.json({
       accepted: true,
-      import_id: payload?.import_id ?? null,
+      created: Boolean(created),
+      import_id: importId,
+      import_status: status,
+      lines_in_error: linesError,
+      lines_in_success: linesSuccess,
+      offer_inserted: inserted,
       old_sku: oldSku,
       new_sku: newSku,
-      title: oldOffer.product_title ?? null,
-      note: "L'ancienne offre reste active. Vérifier la nouvelle offre avant toute désactivation.",
+      product_reference: productRef,
+      note: created
+        ? "La nouvelle offre est réellement présente dans Mirakl."
+        : "Import envoyé. La nouvelle offre n'est pas encore visible; vérifier de nouveau après traitement.",
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Erreur inconnue" }, { status: 500 });
