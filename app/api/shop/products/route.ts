@@ -3,8 +3,6 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 const SHOP_BASE = "https://shop.pastapiemonte.com/wp-json/wc/store/v1/products";
-const SHOP_PRODUCTS_URL = `${SHOP_BASE}?per_page=100`;
-const SHOP_VARIATIONS_URL = `${SHOP_BASE}?type=variation&per_page=100`;
 
 type WooProduct = {
   id?: number;
@@ -102,29 +100,26 @@ function normalizeProduct(product: WooProduct, parent?: WooProduct | null) {
   };
 }
 
+async function fetchAll(urlBuilder: (page: number) => string) {
+  const all: WooProduct[] = [];
+  for (let page = 1; page <= 50; page += 1) {
+    const response = await fetch(urlBuilder(page), { headers: { Accept: "application/json" }, cache: "no-store" });
+    const payload = await response.json().catch(() => null) as WooProduct[] | null;
+    if (!response.ok || !Array.isArray(payload)) {
+      throw new Error(`WooCommerce ${response.status}`);
+    }
+    all.push(...payload);
+    if (payload.length < 100) break;
+  }
+  return all;
+}
+
 export async function GET() {
   try {
-    const [productsResponse, variationsResponse] = await Promise.all([
-      fetch(SHOP_PRODUCTS_URL, { headers: { Accept: "application/json" }, cache: "no-store" }),
-      fetch(SHOP_VARIATIONS_URL, { headers: { Accept: "application/json" }, cache: "no-store" }),
+    const [productsPayload, variationsPayload] = await Promise.all([
+      fetchAll((page) => `${SHOP_BASE}?per_page=100&page=${page}`),
+      fetchAll((page) => `${SHOP_BASE}?type=variation&per_page=100&page=${page}`),
     ]);
-
-    const productsPayload = await productsResponse.json().catch(() => null) as WooProduct[] | null;
-    const variationsPayload = await variationsResponse.json().catch(() => null) as WooProduct[] | null;
-
-    if (!productsResponse.ok || !Array.isArray(productsPayload)) {
-      return NextResponse.json(
-        { error: "Impossible de lire le catalogue WooCommerce", upstreamStatus: productsResponse.status },
-        { status: 502 },
-      );
-    }
-
-    if (!variationsResponse.ok || !Array.isArray(variationsPayload)) {
-      return NextResponse.json(
-        { error: "Impossible de lire les variations WooCommerce", upstreamStatus: variationsResponse.status },
-        { status: 502 },
-      );
-    }
 
     const parentById = new Map<number, WooProduct>();
     for (const product of productsPayload) {
