@@ -13,6 +13,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <div style={{ maxWidth: 1120, margin: "0 auto", display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
             <strong style={{ marginRight: 8 }}>Pourdebon Gestion</strong>
             <a href="/" style={{ color: "white", textDecoration: "none", fontWeight: 700, fontSize: 13 }}>Prix frais</a>
+            <a href="/catalogo" style={{ color: "white", textDecoration: "none", fontWeight: 700, fontSize: 13 }}>Catalogo</a>
             <a href="/ravioli-750" style={{ color: "white", textDecoration: "none", fontWeight: 700, fontSize: 13 }}>Ravioli 750 g</a>
           </div>
         </nav>
