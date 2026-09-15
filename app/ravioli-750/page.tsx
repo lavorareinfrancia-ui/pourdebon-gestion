@@ -11,6 +11,11 @@ type Candidate = {
   quantity: number | null;
   state_code: string | null;
   new_exists?: boolean;
+  new_present?: boolean;
+  new_active?: boolean;
+  new_channels?: string[];
+  old_channels?: string[];
+  inactivity_reasons?: string[];
   new_price?: number | null;
   new_quantity?: number | null;
   new_state_code?: string | null;
@@ -40,7 +45,7 @@ export default function Ravioli750Page() {
 
   useEffect(() => { load(); }, []);
 
-  async function create(candidate: Candidate) {
+  async function createOrRepair(candidate: Candidate) {
     if (!candidate.old_sku || !candidate.new_sku) return;
     setBusy(candidate.old_sku);
     setMessage("");
@@ -52,20 +57,13 @@ export default function Ravioli750Page() {
         body: JSON.stringify({ oldSku: candidate.old_sku, newSku: candidate.new_sku }),
       });
       const data = await response.json();
-      if (!response.ok) {
-        const report = typeof data.error_report === "string" && data.error_report.trim()
-          ? `\n\nRapport Mirakl:\n${data.error_report}`
-          : "";
-        throw new Error(`${data.error || "Création refusée"}${data.import_id ? ` (import ${data.import_id})` : ""}${report}`);
-      }
+      if (!response.ok) throw new Error(`${data.error || "Opération refusée"}${data.import_id ? ` (import ${data.import_id})` : ""}`);
 
-      if (data.created) {
-        setMessage(`${candidate.title ?? candidate.old_sku}: ${candidate.new_sku} est réellement créé dans Mirakl${data.import_id ? ` (import ${data.import_id})` : ""}.`);
+      if (data.ready) {
+        setMessage(`${candidate.title ?? candidate.old_sku}: ${candidate.new_sku} est maintenant active et synchronisée sur les mêmes canaux que l'ancienne référence${data.import_id ? ` (import ${data.import_id})` : ""}.`);
       } else {
-        const stats = data.import_id
-          ? ` Import ${data.import_id} — statut ${data.import_status ?? "PENDING"}, succès ${data.lines_in_success ?? 0}, erreurs ${data.lines_in_error ?? 0}, insérées ${data.offer_inserted ?? 0}.`
-          : "";
-        setMessage(`${candidate.title ?? candidate.old_sku}: import envoyé mais ${candidate.new_sku} n'est pas encore visible dans Mirakl.${stats}`);
+        const reasons = Array.isArray(data.inactivity_reasons) && data.inactivity_reasons.length ? ` Motif(s): ${data.inactivity_reasons.join(", ")}.` : "";
+        setMessage(`${candidate.title ?? candidate.old_sku}: ${data.mode === "repair" ? "réparation" : "création"} envoyée. La référence existe mais n'est pas encore confirmée active sur les mêmes canaux.${reasons}`);
       }
       setTimeout(load, 2500);
     } catch (e) {
@@ -81,7 +79,7 @@ export default function Ravioli750Page() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Migration ravioli 750 g</h1>
-          <p style={styles.subtitle}>Création des nouveaux SKU 750 g à partir des anciennes références 1 kg. Citron et PRO sont exclus. La page n'indique “créé” que lorsque le nouveau SKU est réellement retrouvé dans Mirakl.</p>
+          <p style={styles.subtitle}>Les références 750 g sont considérées comme terminées uniquement si elles existent, sont actives et portent les mêmes canaux de vente que l'ancienne offre. Citron et PRO sont exclus.</p>
         </div>
         <a href="/" style={styles.link}>← Prix</a>
       </section>
@@ -96,6 +94,8 @@ export default function Ravioli750Page() {
             <div style={styles.product}>
               <strong>{item.title ?? "—"}</strong>
               <span style={styles.meta}>Produit Mirakl: {item.product_sku ?? "—"}</span>
+              {item.new_present && !item.new_exists && <span style={styles.warn}>Présent via API mais pas encore actif/synchronisé</span>}
+              {item.inactivity_reasons && item.inactivity_reasons.length > 0 && <span style={styles.warn}>Blocage Mirakl: {item.inactivity_reasons.join(", ")}</span>}
             </div>
             <div style={styles.skuBox}>
               <span style={styles.label}>Ancien SKU</span>
@@ -105,24 +105,24 @@ export default function Ravioli750Page() {
             <div style={styles.skuBox}>
               <span style={styles.label}>Nouveau SKU</span>
               <strong>{item.new_sku ?? "—"}</strong>
-              {item.new_exists && <span style={styles.created}>Présent dans Mirakl</span>}
+              {item.new_exists && <span style={styles.created}>Actif dans Mirakl</span>}
             </div>
             <div style={styles.skuBox}>
               <span style={styles.label}>Prix</span>
-              <strong>{item.new_exists && item.new_price != null ? `${Number(item.new_price).toFixed(2)} €` : item.price == null ? "—" : `${Number(item.price).toFixed(2)} €`}</strong>
+              <strong>{item.new_present && item.new_price != null ? `${Number(item.new_price).toFixed(2)} €` : item.price == null ? "—" : `${Number(item.price).toFixed(2)} €`}</strong>
             </div>
             {item.new_exists ? (
-              <span style={styles.badgeOk}>750 g créé</span>
+              <span style={styles.badgeOk}>750 g actif</span>
             ) : (
-              <button onClick={() => create(item)} disabled={busy !== null} style={styles.button}>
-                {busy === item.old_sku ? "Création + contrôle…" : "Créer 750 g"}
+              <button onClick={() => createOrRepair(item)} disabled={busy !== null} style={styles.button}>
+                {busy === item.old_sku ? "Synchronisation…" : item.new_present ? "Réparer / synchroniser" : "Créer 750 g"}
               </button>
             )}
           </div>
         ))}
       </section>
 
-      <section style={styles.note}><strong>Sécurité:</strong> la création utilise maintenant l'import d'offres Mirakl documenté (OF01), puis contrôle son traitement (OF02) et affiche le rapport d'erreur Mirakl (OF03) si la ligne est refusée. L'ancien SKU reste actif jusqu'à confirmation réelle du nouveau.</section>
+      <section style={styles.note}><strong>Sécurité:</strong> la synchronisation utilise l'API Mirakl OF24 et recopie l'offre complète: prix par canal, champs additionnels, stock, état, dates, logistique, quantités minimum/maximum et paramètres disponibles. L'ancien SKU reste inchangé tant que le 750 g n'est pas confirmé actif.</section>
     </main>
   );
 }
@@ -132,7 +132,7 @@ const styles: Record<string, React.CSSProperties> = {
   header: { maxWidth: 1050, margin: "0 auto 22px", display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-end", flexWrap: "wrap" },
   eyebrow: { margin: "0 0 7px", fontSize: 12, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "#7a6654" },
   title: { margin: 0, fontSize: "clamp(28px,4vw,40px)" },
-  subtitle: { margin: "10px 0 0", maxWidth: 760, color: "#6e675f", lineHeight: 1.45, fontSize: 14 },
+  subtitle: { margin: "10px 0 0", maxWidth: 800, color: "#6e675f", lineHeight: 1.45, fontSize: 14 },
   link: { color: "#26231f", fontWeight: 700, textDecoration: "none" },
   panel: { maxWidth: 1050, margin: "0 auto", background: "white", border: "1px solid #e5dfd7", borderRadius: 14, overflow: "hidden" },
   panelTitle: { padding: "14px 16px", fontWeight: 800, fontSize: 18, background: "#faf8f5", borderBottom: "1px solid #ece7e1" },
@@ -143,6 +143,7 @@ const styles: Record<string, React.CSSProperties> = {
   skuBox: { display: "flex", flexDirection: "column", gap: 3, fontSize: 12 },
   label: { color: "#7b746c", textTransform: "uppercase", fontSize: 9, letterSpacing: ".04em" },
   created: { marginTop: 3, fontSize: 10, fontWeight: 700, color: "#276235" },
+  warn: { color: "#9a5a16", fontSize: 10, fontWeight: 700 },
   arrow: { color: "#9d958d", fontWeight: 800 },
   button: { border: 0, borderRadius: 9, background: "#26231f", color: "white", padding: "10px 13px", fontWeight: 800, cursor: "pointer" },
   badgeOk: { display: "inline-block", padding: "8px 10px", borderRadius: 999, background: "#e8f5ea", fontSize: 11, fontWeight: 800, color: "#276235", textAlign: "center" },
