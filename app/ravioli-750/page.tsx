@@ -10,6 +10,10 @@ type Candidate = {
   price: number | null;
   quantity: number | null;
   state_code: string | null;
+  new_exists?: boolean;
+  new_price?: number | null;
+  new_quantity?: number | null;
+  new_state_code?: string | null;
 };
 
 export default function Ravioli750Page() {
@@ -49,8 +53,8 @@ export default function Ravioli750Page() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Création refusée");
-      setMessage(`${candidate.title ?? candidate.old_sku}: création ${candidate.new_sku} acceptée par Mirakl${data.import_id ? ` (import ${data.import_id})` : ""}. L'ancienne référence reste active.`);
-      setTimeout(load, 2500);
+      setMessage(`${candidate.title ?? candidate.old_sku}: création ${candidate.new_sku} acceptée par Mirakl${data.import_id ? ` (import ${data.import_id})` : ""}. Vérification automatique en cours.`);
+      setTimeout(load, 3000);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur inconnue");
     } finally {
@@ -64,7 +68,7 @@ export default function Ravioli750Page() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Migration ravioli 750 g</h1>
-          <p style={styles.subtitle}>Création des nouveaux SKU 750 g à partir des anciennes références 1 kg. Citron et PRO sont exclus. Aucune ancienne offre n'est supprimée ni désactivée ici.</p>
+          <p style={styles.subtitle}>Création des nouveaux SKU 750 g à partir des anciennes références 1 kg. Citron et PRO sont exclus. Les nouvelles références déjà créées restent visibles ici avec leur statut.</p>
         </div>
         <a href="/" style={styles.link}>← Prix</a>
       </section>
@@ -74,7 +78,7 @@ export default function Ravioli750Page() {
 
       <section style={styles.panel}>
         <div style={styles.panelTitle}>Références détectées</div>
-        {loading ? <p style={styles.pad}>Chargement…</p> : items.length === 0 ? <p style={styles.pad}>Aucune ancienne référence 750 g avec SKU 1kg détectée.</p> : items.map((item) => (
+        {loading ? <p style={styles.pad}>Chargement…</p> : items.length === 0 ? <p style={styles.pad}>Aucune ancienne référence ravioli 1 kg à migrer détectée.</p> : items.map((item) => (
           <div key={item.old_sku ?? item.title ?? Math.random()} style={styles.row}>
             <div style={styles.product}>
               <strong>{item.title ?? "—"}</strong>
@@ -88,19 +92,24 @@ export default function Ravioli750Page() {
             <div style={styles.skuBox}>
               <span style={styles.label}>Nouveau SKU</span>
               <strong>{item.new_sku ?? "—"}</strong>
+              {item.new_exists && <span style={styles.created}>Créé dans Mirakl</span>}
             </div>
             <div style={styles.skuBox}>
-              <span style={styles.label}>Prix actuel</span>
-              <strong>{item.price == null ? "—" : `${Number(item.price).toFixed(2)} €`}</strong>
+              <span style={styles.label}>Prix</span>
+              <strong>{item.new_exists && item.new_price != null ? `${Number(item.new_price).toFixed(2)} €` : item.price == null ? "—" : `${Number(item.price).toFixed(2)} €`}</strong>
             </div>
-            <button onClick={() => create(item)} disabled={busy !== null} style={styles.button}>
-              {busy === item.old_sku ? "Création…" : "Créer 750 g"}
-            </button>
+            {item.new_exists ? (
+              <span style={styles.badgeOk}>750 g créé</span>
+            ) : (
+              <button onClick={() => create(item)} disabled={busy !== null} style={styles.button}>
+                {busy === item.old_sku ? "Création…" : "Créer 750 g"}
+              </button>
+            )}
           </div>
         ))}
       </section>
 
-      <section style={styles.note}><strong>Sécurité:</strong> la nouvelle offre est rattachée au même produit Mirakl et reprend prix, stock, état et paramètres logistiques de l'ancienne. On ne désactive l'ancien SKU qu'après vérification de la nouvelle référence dans Pourdebon.</section>
+      <section style={styles.note}><strong>Sécurité:</strong> la nouvelle offre est rattachée au même produit Mirakl et reprend prix, stock, état et paramètres logistiques de l'ancienne. L'ancien SKU n'est pas désactivé ici. Une fois la nouvelle référence vérifiée, on pourra passer l'ancienne à stock zéro.</section>
     </main>
   );
 }
@@ -120,8 +129,10 @@ const styles: Record<string, React.CSSProperties> = {
   meta: { color: "#797169", fontSize: 11 },
   skuBox: { display: "flex", flexDirection: "column", gap: 3, fontSize: 12 },
   label: { color: "#7b746c", textTransform: "uppercase", fontSize: 9, letterSpacing: ".04em" },
+  created: { marginTop: 3, fontSize: 10, fontWeight: 700, color: "#276235" },
   arrow: { color: "#9d958d", fontWeight: 800 },
   button: { border: 0, borderRadius: 9, background: "#26231f", color: "white", padding: "10px 13px", fontWeight: 800, cursor: "pointer" },
+  badgeOk: { display: "inline-block", padding: "8px 10px", borderRadius: 999, background: "#e8f5ea", fontSize: 11, fontWeight: 800, color: "#276235", textAlign: "center" },
   success: { maxWidth: 1050, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#e8f5ea", color: "#276235", border: "1px solid #bcdcc3" },
   error: { maxWidth: 1050, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1" },
   note: { maxWidth: 1050, margin: "14px auto 0", padding: 14, borderRadius: 10, background: "#efeae3", color: "#5f574e", fontSize: 12, lineHeight: 1.5 },
