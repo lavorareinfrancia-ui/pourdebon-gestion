@@ -52,9 +52,22 @@ export default function Ravioli750Page() {
         body: JSON.stringify({ oldSku: candidate.old_sku, newSku: candidate.new_sku }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Création refusée");
-      setMessage(`${candidate.title ?? candidate.old_sku}: création ${candidate.new_sku} acceptée par Mirakl${data.import_id ? ` (import ${data.import_id})` : ""}. Vérification automatique en cours.`);
-      setTimeout(load, 3000);
+      if (!response.ok) {
+        const report = typeof data.error_report === "string" && data.error_report.trim()
+          ? `\n\nRapport Mirakl:\n${data.error_report}`
+          : "";
+        throw new Error(`${data.error || "Création refusée"}${data.import_id ? ` (import ${data.import_id})` : ""}${report}`);
+      }
+
+      if (data.created) {
+        setMessage(`${candidate.title ?? candidate.old_sku}: ${candidate.new_sku} est réellement créé dans Mirakl${data.import_id ? ` (import ${data.import_id})` : ""}.`);
+      } else {
+        const stats = data.import_id
+          ? ` Import ${data.import_id} — statut ${data.import_status ?? "PENDING"}, succès ${data.lines_in_success ?? 0}, erreurs ${data.lines_in_error ?? 0}, insérées ${data.offer_inserted ?? 0}.`
+          : "";
+        setMessage(`${candidate.title ?? candidate.old_sku}: import envoyé mais ${candidate.new_sku} n'est pas encore visible dans Mirakl.${stats}`);
+      }
+      setTimeout(load, 2500);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur inconnue");
     } finally {
@@ -68,7 +81,7 @@ export default function Ravioli750Page() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Migration ravioli 750 g</h1>
-          <p style={styles.subtitle}>Création des nouveaux SKU 750 g à partir des anciennes références 1 kg. Citron et PRO sont exclus. Les nouvelles références déjà créées restent visibles ici avec leur statut.</p>
+          <p style={styles.subtitle}>Création des nouveaux SKU 750 g à partir des anciennes références 1 kg. Citron et PRO sont exclus. La page n'indique “créé” que lorsque le nouveau SKU est réellement retrouvé dans Mirakl.</p>
         </div>
         <a href="/" style={styles.link}>← Prix</a>
       </section>
@@ -92,7 +105,7 @@ export default function Ravioli750Page() {
             <div style={styles.skuBox}>
               <span style={styles.label}>Nouveau SKU</span>
               <strong>{item.new_sku ?? "—"}</strong>
-              {item.new_exists && <span style={styles.created}>Créé dans Mirakl</span>}
+              {item.new_exists && <span style={styles.created}>Présent dans Mirakl</span>}
             </div>
             <div style={styles.skuBox}>
               <span style={styles.label}>Prix</span>
@@ -102,14 +115,14 @@ export default function Ravioli750Page() {
               <span style={styles.badgeOk}>750 g créé</span>
             ) : (
               <button onClick={() => create(item)} disabled={busy !== null} style={styles.button}>
-                {busy === item.old_sku ? "Création…" : "Créer 750 g"}
+                {busy === item.old_sku ? "Création + contrôle…" : "Créer 750 g"}
               </button>
             )}
           </div>
         ))}
       </section>
 
-      <section style={styles.note}><strong>Sécurité:</strong> la nouvelle offre est rattachée au même produit Mirakl et reprend prix, stock, état et paramètres logistiques de l'ancienne. L'ancien SKU n'est pas désactivé ici. Une fois la nouvelle référence vérifiée, on pourra passer l'ancienne à stock zéro.</section>
+      <section style={styles.note}><strong>Sécurité:</strong> la création utilise maintenant l'import d'offres Mirakl documenté (OF01), puis contrôle son traitement (OF02) et affiche le rapport d'erreur Mirakl (OF03) si la ligne est refusée. L'ancien SKU reste actif jusqu'à confirmation réelle du nouveau.</section>
     </main>
   );
 }
@@ -133,7 +146,7 @@ const styles: Record<string, React.CSSProperties> = {
   arrow: { color: "#9d958d", fontWeight: 800 },
   button: { border: 0, borderRadius: 9, background: "#26231f", color: "white", padding: "10px 13px", fontWeight: 800, cursor: "pointer" },
   badgeOk: { display: "inline-block", padding: "8px 10px", borderRadius: 999, background: "#e8f5ea", fontSize: 11, fontWeight: 800, color: "#276235", textAlign: "center" },
-  success: { maxWidth: 1050, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#e8f5ea", color: "#276235", border: "1px solid #bcdcc3" },
-  error: { maxWidth: 1050, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1" },
+  success: { maxWidth: 1050, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#e8f5ea", color: "#276235", border: "1px solid #bcdcc3", whiteSpace: "pre-wrap" },
+  error: { maxWidth: 1050, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1", whiteSpace: "pre-wrap" },
   note: { maxWidth: 1050, margin: "14px auto 0", padding: 14, borderRadius: 10, background: "#efeae3", color: "#5f574e", fontSize: 12, lineHeight: 1.5 },
 };
