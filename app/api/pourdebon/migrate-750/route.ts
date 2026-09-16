@@ -41,26 +41,45 @@ function getProductReference(offer: RawOffer) {
   return productSku ? { type: "SKU", value: productSku } : null;
 }
 
+async function sleep(ms: number) { await new Promise((resolve) => setTimeout(resolve, ms)); }
+
 async function miraklFetch(path: string, init?: RequestInit) {
   const apiKey = process.env.POURDEBON_API_KEY;
   const baseUrl = process.env.POURDEBON_BASE_URL;
   if (!apiKey || !baseUrl) throw new Error("Configuration Pourdebon manquante");
-  const response = await fetch(new URL(path, baseUrl), {
-    ...init,
-    headers: { Authorization: apiKey, Accept: "application/json", ...(init?.headers ?? {}) },
-    cache: "no-store",
-  });
-  const text = await response.text();
-  let payload: any = null;
-  try { payload = text ? JSON.parse(text) : null; } catch { payload = { raw: text }; }
-  return { response, payload };
+
+  let lastResponse: Response | null = null;
+  let lastPayload: any = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await fetch(new URL(path, baseUrl), {
+      ...init,
+      headers: { Authorization: apiKey, Accept: "application/json", ...(init?.headers ?? {}) },
+      cache: "no-store",
+    });
+    const text = await response.text();
+    let payload: any = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { payload = { raw: text }; }
+    lastResponse = response;
+    lastPayload = payload;
+
+    if (response.status !== 429) return { response, payload };
+
+    const retryAfterRaw = response.headers.get("retry-after");
+    const retryAfterSeconds = retryAfterRaw ? Number(retryAfterRaw) : NaN;
+    const waitMs = Number.isFinite(retryAfterSeconds)
+      ? Math.max(1000, retryAfterSeconds * 1000)
+      : 1500 * (attempt + 1);
+    await sleep(waitMs);
+  }
+
+  return { response: lastResponse as Response, payload: lastPayload };
 }
 
 async function getAllOffers() {
   const all: RawOffer[] = [];
   for (let offset = 0; offset < 5000; offset += 100) {
     const { response, payload } = await miraklFetch(`/api/offers?max=100&offset=${offset}`);
-    if (!response.ok) throw new Error(`Lecture Mirakl impossible (${response.status})`);
+    if (!response.ok) throw new Error(response.status === 429 ? "Mirakl limite temporairement les lectures. Réessayer dans quelques secondes." : `Lecture Mirakl impossible (${response.status})`);
     const batch = Array.isArray(payload?.offers) ? payload.offers as RawOffer[] : [];
     all.push(...batch);
     if (batch.length < 100) break;
@@ -69,7 +88,7 @@ async function getAllOffers() {
 }
 async function getOfferBySku(sku: string) {
   const { response, payload } = await miraklFetch(`/api/offers?sku=${encodeURIComponent(sku)}&max=10&offset=0`);
-  if (!response.ok) throw new Error(`Lecture Mirakl impossible (${response.status})`);
+  if (!response.ok) throw new Error(response.status === 429 ? "Mirakl limite temporairement les lectures. Réessayer dans quelques secondes." : `Lecture Mirakl impossible (${response.status})`);
   const offers = Array.isArray(payload?.offers) ? payload.offers : [];
   const exact = offers.filter((offer: RawOffer) => String(offer.shop_sku ?? "") === sku);
   if (exact.length !== 1) throw new Error(`SKU source non univoque: ${sku}`);
@@ -145,11 +164,10 @@ function fullClone(oldOffer: RawOffer, newSku: string, productRef: { type: strin
   };
 }
 
-async function sleep(ms: number) { await new Promise((resolve) => setTimeout(resolve, ms)); }
 async function waitImport(importId: string) {
   let tracking: any = null;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    await sleep(800);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await sleep(1400);
     const { response, payload } = await miraklFetch(`/api/offers/imports/${encodeURIComponent(importId)}`);
     if (response.ok) tracking = payload;
     const status = String(tracking?.status ?? tracking?.import?.status ?? "").toUpperCase();
@@ -239,7 +257,7 @@ export async function POST(request: NextRequest) {
       if (String(result.info?.status ?? "").toUpperCase() === "FAILED" || linesError > 0) {
         return NextResponse.json({ error: "Mirakl a refusé la mise à zéro de ROERO-1kg", import_id: result.importId, details: result.info }, { status: 409 });
       }
-      await sleep(1200);
+      await sleep(1800);
       const oldAfter = await findOfferBySku(oldSku);
       const confirmedZero = Number(oldAfter?.quantity ?? -1) === 0;
       return NextResponse.json({
@@ -267,7 +285,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Mirakl a refusé la synchronisation de l'offre", import_id: result.importId, details: result.info }, { status: 409 });
     }
 
-    await sleep(1200);
+    await sleep(1800);
     const after = await findOfferBySku(newSku);
     const issues = configurationIssues(oldOffer, after);
     return NextResponse.json({
