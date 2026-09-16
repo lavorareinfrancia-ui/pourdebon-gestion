@@ -114,9 +114,8 @@ function configurationIssues(oldOffer: RawOffer, newOffer: RawOffer | null) {
   if (Number(oldOffer.package_quantity ?? 1) !== Number(newOffer.package_quantity ?? 1)) issues.push("conditionnement différent");
   return issues;
 }
-function isReady(oldOffer: RawOffer, newOffer: RawOffer | null) { return configurationIssues(oldOffer, newOffer).length === 0; }
 
-function fullClone(oldOffer: RawOffer, newSku: string, productRef: { type: string; value: string }) {
+function fullClone(oldOffer: RawOffer, newSku: string, productRef: { type: string; value: string }, quantityOverride?: number) {
   return {
     all_prices: Array.isArray(oldOffer.all_prices) ? oldOffer.all_prices : [],
     allow_quote_requests: Boolean(oldOffer.allow_quote_requests ?? false),
@@ -139,7 +138,7 @@ function fullClone(oldOffer: RawOffer, newSku: string, productRef: { type: strin
     product_id: productRef.value,
     product_id_type: productRef.type,
     product_tax_code: oldOffer.product_tax_code ?? "",
-    quantity: Number(oldOffer.quantity ?? 0),
+    quantity: quantityOverride ?? Number(oldOffer.quantity ?? 0),
     shop_sku: newSku,
     state_code: String(oldOffer.state_code ?? "11"),
     update_delete: "update",
@@ -157,6 +156,18 @@ async function waitImport(importId: string) {
     if (status === "COMPLETE" || status === "FAILED") break;
   }
   return tracking?.import ?? tracking ?? {};
+}
+
+async function pushOffer(offerPayload: RawOffer) {
+  const { response, payload } = await miraklFetch("/api/offers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ offers: [offerPayload] }),
+  });
+  if (!response.ok) return { ok: false, response, payload, importId: "", info: {} as any };
+  const importId = String(payload?.import_id ?? "").trim();
+  const info = importId ? await waitImport(importId) : {};
+  return { ok: true, response, payload, importId, info };
 }
 
 export async function GET() {
@@ -186,6 +197,7 @@ export async function GET() {
         new_price: current?.price ?? null,
         new_quantity: current?.quantity ?? null,
         new_state_code: current?.state_code ?? null,
+        roero_zero_test_available: oldSku.toUpperCase() === "ROERO-1KG" && Boolean(current) && Number(current?.quantity ?? 0) > 0 && Number(offer.quantity ?? 0) > 0,
       };
     });
     return NextResponse.json({ candidates, offer_count: offers.length, note: "Le champ active de Mirakl prouve un état API, pas à lui seul la visibilité dans le filtre BtoC du back-office Pourdebon." });
@@ -196,9 +208,10 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => null) as { oldSku?: string; newSku?: string } | null;
+    const body = await request.json().catch(() => null) as { oldSku?: string; newSku?: string; action?: string } | null;
     const oldSku = String(body?.oldSku ?? "").trim();
     const newSku = String(body?.newSku ?? "").trim();
+    const action = String(body?.action ?? "sync").trim();
     if (!oldSku || !newSku) return NextResponse.json({ error: "oldSku et newSku sont obligatoires" }, { status: 400 });
     if (!/750/i.test(newSku) || /1\s*kg/i.test(newSku)) return NextResponse.json({ error: "Le nouveau SKU doit clairement identifier 750 g" }, { status: 400 });
 
@@ -207,19 +220,51 @@ export async function POST(request: NextRequest) {
     const productRef = getProductReference(oldOffer);
     if (!productRef) return NextResponse.json({ error: "Impossible d'identifier de façon sûre le produit Mirakl associé" }, { status: 409 });
 
-    const before = await findOfferBySku(newSku);
-    const { response, payload } = await miraklFetch("/api/offers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ offers: [fullClone(oldOffer, newSku, productRef)] }),
-    });
-    if (!response.ok) return NextResponse.json({ error: "Mise à jour OF24 refusée par Mirakl", upstreamStatus: response.status, details: payload }, { status: 502 });
+    if (action === "zero-old-roero") {
+      if (oldSku.toUpperCase() !== "ROERO-1KG" || newSku.toUpperCase() !== "ROERO-750") {
+        return NextResponse.json({ error: "Test stock zéro autorisé uniquement pour ROERO-1kg → ROERO-750" }, { status: 403 });
+      }
+      const newOffer = await findOfferBySku(newSku);
+      if (!newOffer || newOffer.active !== true || Number(newOffer.quantity ?? 0) <= 0) {
+        return NextResponse.json({ error: "Sécurité: ROERO-750 doit exister, être active via API et avoir du stock avant de mettre l'ancienne référence à zéro" }, { status: 409 });
+      }
+      if (String(newOffer.product_sku ?? "") !== String(oldOffer.product_sku ?? "")) {
+        return NextResponse.json({ error: "Sécurité: les deux références ne pointent pas vers le même produit Mirakl" }, { status: 409 });
+      }
 
-    const importId = String(payload?.import_id ?? "").trim();
-    const info = importId ? await waitImport(importId) : {};
-    const linesError = Number(info?.lines_in_error ?? 0);
-    if (String(info?.status ?? "").toUpperCase() === "FAILED" || linesError > 0) {
-      return NextResponse.json({ error: "Mirakl a refusé la synchronisation de l'offre", import_id: importId, details: info }, { status: 409 });
+      const previousQuantity = Number(oldOffer.quantity ?? 0);
+      const result = await pushOffer(fullClone(oldOffer, oldSku, productRef, 0));
+      if (!result.ok) return NextResponse.json({ error: "Mise à zéro ROERO refusée par Mirakl", upstreamStatus: result.response.status, details: result.payload }, { status: 502 });
+      const linesError = Number(result.info?.lines_in_error ?? 0);
+      if (String(result.info?.status ?? "").toUpperCase() === "FAILED" || linesError > 0) {
+        return NextResponse.json({ error: "Mirakl a refusé la mise à zéro de ROERO-1kg", import_id: result.importId, details: result.info }, { status: 409 });
+      }
+      await sleep(1200);
+      const oldAfter = await findOfferBySku(oldSku);
+      const confirmedZero = Number(oldAfter?.quantity ?? -1) === 0;
+      return NextResponse.json({
+        accepted: true,
+        action,
+        import_id: result.importId || null,
+        old_sku: oldSku,
+        new_sku: newSku,
+        previous_quantity: previousQuantity,
+        old_quantity: oldAfter?.quantity ?? null,
+        new_quantity: newOffer.quantity ?? null,
+        confirmed_zero: confirmedZero,
+        note: confirmedZero
+          ? "ROERO-1kg est maintenant à stock 0. Vérifier si ROERO-750 apparaît dans le back-office BtoC Pourdebon."
+          : "La demande a été acceptée mais le stock 0 n'est pas encore confirmé par l'API; attendre la fin du traitement Mirakl.",
+      });
+    }
+
+    const before = await findOfferBySku(newSku);
+    const result = await pushOffer(fullClone(oldOffer, newSku, productRef));
+    if (!result.ok) return NextResponse.json({ error: "Mise à jour OF24 refusée par Mirakl", upstreamStatus: result.response.status, details: result.payload }, { status: 502 });
+
+    const linesError = Number(result.info?.lines_in_error ?? 0);
+    if (String(result.info?.status ?? "").toUpperCase() === "FAILED" || linesError > 0) {
+      return NextResponse.json({ error: "Mirakl a refusé la synchronisation de l'offre", import_id: result.importId, details: result.info }, { status: 409 });
     }
 
     await sleep(1200);
@@ -228,7 +273,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       accepted: true,
       mode: before ? "repair" : "create",
-      import_id: importId || null,
+      import_id: result.importId || null,
       created: Boolean(after),
       ready: issues.length === 0,
       active: after?.active ?? false,
