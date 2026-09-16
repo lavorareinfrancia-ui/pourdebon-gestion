@@ -8,7 +8,6 @@ type ProductReference = { type?: string; reference_type?: string; product_id_typ
 function normalize(value: unknown) {
   return String(value ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 }
-
 function isPro(value: unknown) { return /(^|\s)pro(\s|$)/i.test(normalize(value)); }
 function isProSku(value: unknown) {
   const raw = String(value ?? "").toUpperCase().replace(/\s+/g, "");
@@ -68,7 +67,6 @@ async function getAllOffers() {
   }
   return all;
 }
-
 async function getOfferBySku(sku: string) {
   const { response, payload } = await miraklFetch(`/api/offers?sku=${encodeURIComponent(sku)}&max=10&offset=0`);
   if (!response.ok) throw new Error(`Lecture Mirakl impossible (${response.status})`);
@@ -77,7 +75,6 @@ async function getOfferBySku(sku: string) {
   if (exact.length !== 1) throw new Error(`SKU source non univoque: ${sku}`);
   return exact[0] as RawOffer;
 }
-
 async function findOfferBySku(sku: string) {
   const { response, payload } = await miraklFetch(`/api/offers?sku=${encodeURIComponent(sku)}&max=10&offset=0`);
   if (!response.ok) return null;
@@ -85,21 +82,41 @@ async function findOfferBySku(sku: string) {
   return offers.find((offer: RawOffer) => String(offer.shop_sku ?? "") === sku) ?? null;
 }
 
-function channelSet(value: unknown) {
-  return new Set(Array.isArray(value) ? value.map(String) : []);
-}
+function channelSet(value: unknown) { return new Set(Array.isArray(value) ? value.map(String) : []); }
 function sameChannels(a: unknown, b: unknown) {
   const left = channelSet(a), right = channelSet(b);
   return left.size === right.size && [...left].every((x) => right.has(x));
 }
-function isReady(oldOffer: RawOffer, newOffer: RawOffer | null) {
-  if (!newOffer || newOffer.active !== true) return false;
-  if (!sameChannels(oldOffer.channels, newOffer.channels)) return false;
-  return !(Array.isArray(newOffer.inactivity_reasons) && newOffer.inactivity_reasons.length > 0);
+function logisticCode(offer: RawOffer) {
+  return String(typeof offer.logistic_class === "object" ? offer.logistic_class?.code ?? "" : offer.logistic_class ?? "");
 }
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).sort().join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stable(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+function configurationIssues(oldOffer: RawOffer, newOffer: RawOffer | null) {
+  const issues: string[] = [];
+  if (!newOffer) return ["nouvelle offre absente"];
+  if (newOffer.active !== true) issues.push("active=false");
+  if (!sameChannels(oldOffer.channels, newOffer.channels)) issues.push("canaux différents");
+  if (Array.isArray(newOffer.inactivity_reasons) && newOffer.inactivity_reasons.length > 0) issues.push(`blocage: ${newOffer.inactivity_reasons.join(", ")}`);
+  if (Number(oldOffer.quantity ?? 0) > 0 && Number(newOffer.quantity ?? 0) <= 0) issues.push("stock nul");
+  if (String(oldOffer.state_code ?? "") !== String(newOffer.state_code ?? "")) issues.push("état différent");
+  if (logisticCode(oldOffer) !== logisticCode(newOffer)) issues.push("classe logistique différente");
+  if (stable(oldOffer.all_prices ?? []) !== stable(newOffer.all_prices ?? [])) issues.push("prix/canaux incomplets");
+  if (stable(oldOffer.offer_additional_fields ?? []) !== stable(newOffer.offer_additional_fields ?? [])) issues.push("champs additionnels différents");
+  if (Number(oldOffer.min_order_quantity ?? 1) !== Number(newOffer.min_order_quantity ?? 1)) issues.push("quantité minimum différente");
+  if (Number(oldOffer.max_order_quantity ?? 0) !== Number(newOffer.max_order_quantity ?? 0)) issues.push("quantité maximum différente");
+  if (Number(oldOffer.package_quantity ?? 1) !== Number(newOffer.package_quantity ?? 1)) issues.push("conditionnement différent");
+  return issues;
+}
+function isReady(oldOffer: RawOffer, newOffer: RawOffer | null) { return configurationIssues(oldOffer, newOffer).length === 0; }
 
 function fullClone(oldOffer: RawOffer, newSku: string, productRef: { type: string; value: string }) {
-  const logisticClass = typeof oldOffer.logistic_class === "object" ? oldOffer.logistic_class?.code : oldOffer.logistic_class;
   return {
     all_prices: Array.isArray(oldOffer.all_prices) ? oldOffer.all_prices : [],
     allow_quote_requests: Boolean(oldOffer.allow_quote_requests ?? false),
@@ -110,7 +127,7 @@ function fullClone(oldOffer: RawOffer, newSku: string, productRef: { type: strin
     eco_contributions: Array.isArray(oldOffer.eco_contributions) ? oldOffer.eco_contributions : [],
     internal_description: oldOffer.internal_description ?? "",
     leadtime_to_ship: Number(oldOffer.leadtime_to_ship ?? 0),
-    logistic_class: logisticClass ?? "",
+    logistic_class: logisticCode(oldOffer),
     max_order_quantity: Number(oldOffer.max_order_quantity ?? 0),
     min_order_quantity: Number(oldOffer.min_order_quantity ?? 1),
     min_quantity_alert: Number(oldOffer.min_quantity_alert ?? 0),
@@ -150,7 +167,7 @@ export async function GET() {
       const oldSku = String(offer.shop_sku ?? "");
       const newSku = suggestedSku(oldSku);
       const current = bySku.get(newSku) ?? null;
-      const ready = isReady(offer, current);
+      const issues = configurationIssues(offer, current);
       return {
         title: offer.product_title ?? null,
         old_sku: oldSku || null,
@@ -159,18 +176,19 @@ export async function GET() {
         price: offer.price ?? null,
         quantity: offer.quantity ?? null,
         state_code: offer.state_code ?? null,
-        new_exists: ready,
+        new_exists: issues.length === 0,
         new_present: Boolean(current),
         new_active: current?.active ?? false,
         new_channels: current?.channels ?? [],
         old_channels: offer.channels ?? [],
         inactivity_reasons: current?.inactivity_reasons ?? [],
+        configuration_issues: issues,
         new_price: current?.price ?? null,
         new_quantity: current?.quantity ?? null,
         new_state_code: current?.state_code ?? null,
       };
     });
-    return NextResponse.json({ candidates, offer_count: offers.length });
+    return NextResponse.json({ candidates, offer_count: offers.length, note: "Le champ active de Mirakl prouve un état API, pas à lui seul la visibilité dans le filtre BtoC du back-office Pourdebon." });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Erreur inconnue" }, { status: 500 });
   }
@@ -201,24 +219,28 @@ export async function POST(request: NextRequest) {
     const info = importId ? await waitImport(importId) : {};
     const linesError = Number(info?.lines_in_error ?? 0);
     if (String(info?.status ?? "").toUpperCase() === "FAILED" || linesError > 0) {
-      return NextResponse.json({ error: "Mirakl a refusé la réparation de l'offre", import_id: importId, details: info }, { status: 409 });
+      return NextResponse.json({ error: "Mirakl a refusé la synchronisation de l'offre", import_id: importId, details: info }, { status: 409 });
     }
 
+    await sleep(1200);
     const after = await findOfferBySku(newSku);
-    const ready = isReady(oldOffer, after);
+    const issues = configurationIssues(oldOffer, after);
     return NextResponse.json({
       accepted: true,
       mode: before ? "repair" : "create",
       import_id: importId || null,
       created: Boolean(after),
-      ready,
+      ready: issues.length === 0,
       active: after?.active ?? false,
       channels: after?.channels ?? [],
       old_channels: oldOffer.channels ?? [],
       inactivity_reasons: after?.inactivity_reasons ?? [],
+      configuration_issues: issues,
       old_sku: oldSku,
       new_sku: newSku,
-      note: ready ? "La référence 750 g est active et alignée sur les canaux de l'ancienne offre." : "La référence existe mais n'est pas encore active sur les mêmes canaux. Relancer le contrôle après traitement Mirakl.",
+      note: issues.length === 0
+        ? "La configuration API est alignée. La visibilité BtoC doit encore être confirmée dans le back-office Pourdebon."
+        : `Synchronisation incomplète: ${issues.join(", ")}`,
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Erreur inconnue" }, { status: 500 });
