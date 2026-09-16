@@ -16,6 +16,7 @@ type Candidate = {
   new_channels?: string[];
   old_channels?: string[];
   inactivity_reasons?: string[];
+  configuration_issues?: string[];
   new_price?: number | null;
   new_quantity?: number | null;
   new_state_code?: string | null;
@@ -59,11 +60,13 @@ export default function Ravioli750Page() {
       const data = await response.json();
       if (!response.ok) throw new Error(`${data.error || "Opération refusée"}${data.import_id ? ` (import ${data.import_id})` : ""}`);
 
+      const issues = Array.isArray(data.configuration_issues) && data.configuration_issues.length
+        ? ` Écart(s) restant(s): ${data.configuration_issues.join(", ")}.`
+        : "";
       if (data.ready) {
-        setMessage(`${candidate.title ?? candidate.old_sku}: ${candidate.new_sku} est maintenant active et synchronisée sur les mêmes canaux que l'ancienne référence${data.import_id ? ` (import ${data.import_id})` : ""}.`);
+        setMessage(`${candidate.title ?? candidate.old_sku}: synchronisation API complète${data.import_id ? ` (import ${data.import_id})` : ""}. Attention: cela ne prouve pas encore l'affichage dans le filtre BtoC du back-office Pourdebon.`);
       } else {
-        const reasons = Array.isArray(data.inactivity_reasons) && data.inactivity_reasons.length ? ` Motif(s): ${data.inactivity_reasons.join(", ")}.` : "";
-        setMessage(`${candidate.title ?? candidate.old_sku}: ${data.mode === "repair" ? "réparation" : "création"} envoyée. La référence existe mais n'est pas encore confirmée active sur les mêmes canaux.${reasons}`);
+        setMessage(`${candidate.title ?? candidate.old_sku}: synchronisation envoyée.${issues}`);
       }
       setTimeout(load, 2500);
     } catch (e) {
@@ -79,7 +82,7 @@ export default function Ravioli750Page() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Migration ravioli 750 g</h1>
-          <p style={styles.subtitle}>Les références 750 g sont considérées comme terminées uniquement si elles existent, sont actives et portent les mêmes canaux de vente que l'ancienne offre. Citron et PRO sont exclus.</p>
+          <p style={styles.subtitle}>Diagnostic strict des références 750 g. Le champ “active” retourné par Mirakl indique un état API, mais ne suffit pas à prouver que l'offre apparaît dans le filtre BtoC du back-office Pourdebon.</p>
         </div>
         <a href="/" style={styles.link}>← Prix</a>
       </section>
@@ -94,8 +97,8 @@ export default function Ravioli750Page() {
             <div style={styles.product}>
               <strong>{item.title ?? "—"}</strong>
               <span style={styles.meta}>Produit Mirakl: {item.product_sku ?? "—"}</span>
-              {item.new_present && !item.new_exists && <span style={styles.warn}>Présent via API mais pas encore actif/synchronisé</span>}
-              {item.inactivity_reasons && item.inactivity_reasons.length > 0 && <span style={styles.warn}>Blocage Mirakl: {item.inactivity_reasons.join(", ")}</span>}
+              {item.new_present && <span style={item.new_exists ? styles.info : styles.warn}>API: {item.new_active ? "active=true" : "active=false"} · visibilité BtoC non confirmée</span>}
+              {item.configuration_issues && item.configuration_issues.length > 0 && <span style={styles.warn}>Écarts détectés: {item.configuration_issues.join(", ")}</span>}
             </div>
             <div style={styles.skuBox}>
               <span style={styles.label}>Ancien SKU</span>
@@ -105,24 +108,20 @@ export default function Ravioli750Page() {
             <div style={styles.skuBox}>
               <span style={styles.label}>Nouveau SKU</span>
               <strong>{item.new_sku ?? "—"}</strong>
-              {item.new_exists && <span style={styles.created}>Actif dans Mirakl</span>}
+              {item.new_exists && <span style={styles.created}>Configuration API alignée</span>}
             </div>
             <div style={styles.skuBox}>
               <span style={styles.label}>Prix</span>
               <strong>{item.new_present && item.new_price != null ? `${Number(item.new_price).toFixed(2)} €` : item.price == null ? "—" : `${Number(item.price).toFixed(2)} €`}</strong>
             </div>
-            {item.new_exists ? (
-              <span style={styles.badgeOk}>750 g actif</span>
-            ) : (
-              <button onClick={() => createOrRepair(item)} disabled={busy !== null} style={styles.button}>
-                {busy === item.old_sku ? "Synchronisation…" : item.new_present ? "Réparer / synchroniser" : "Créer 750 g"}
-              </button>
-            )}
+            <button onClick={() => createOrRepair(item)} disabled={busy !== null} style={styles.button}>
+              {busy === item.old_sku ? "Synchronisation…" : item.new_present ? "Resynchroniser" : "Créer 750 g"}
+            </button>
           </div>
         ))}
       </section>
 
-      <section style={styles.note}><strong>Sécurité:</strong> la synchronisation utilise l'API Mirakl OF24 et recopie l'offre complète: prix par canal, champs additionnels, stock, état, dates, logistique, quantités minimum/maximum et paramètres disponibles. L'ancien SKU reste inchangé tant que le 750 g n'est pas confirmé actif.</section>
+      <section style={styles.note}><strong>Diagnostic:</strong> la page compare maintenant aussi prix par canal, champs additionnels, stock, état, classe logistique, quantités minimum/maximum et conditionnement. Même si tout est aligné via API, l'affichage BtoC reste une vérification distincte dans le back-office Pourdebon.</section>
     </main>
   );
 }
@@ -132,7 +131,7 @@ const styles: Record<string, React.CSSProperties> = {
   header: { maxWidth: 1050, margin: "0 auto 22px", display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-end", flexWrap: "wrap" },
   eyebrow: { margin: "0 0 7px", fontSize: 12, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "#7a6654" },
   title: { margin: 0, fontSize: "clamp(28px,4vw,40px)" },
-  subtitle: { margin: "10px 0 0", maxWidth: 800, color: "#6e675f", lineHeight: 1.45, fontSize: 14 },
+  subtitle: { margin: "10px 0 0", maxWidth: 820, color: "#6e675f", lineHeight: 1.45, fontSize: 14 },
   link: { color: "#26231f", fontWeight: 700, textDecoration: "none" },
   panel: { maxWidth: 1050, margin: "0 auto", background: "white", border: "1px solid #e5dfd7", borderRadius: 14, overflow: "hidden" },
   panelTitle: { padding: "14px 16px", fontWeight: 800, fontSize: 18, background: "#faf8f5", borderBottom: "1px solid #ece7e1" },
@@ -143,10 +142,10 @@ const styles: Record<string, React.CSSProperties> = {
   skuBox: { display: "flex", flexDirection: "column", gap: 3, fontSize: 12 },
   label: { color: "#7b746c", textTransform: "uppercase", fontSize: 9, letterSpacing: ".04em" },
   created: { marginTop: 3, fontSize: 10, fontWeight: 700, color: "#276235" },
+  info: { color: "#3f5d73", fontSize: 10, fontWeight: 700 },
   warn: { color: "#9a5a16", fontSize: 10, fontWeight: 700 },
   arrow: { color: "#9d958d", fontWeight: 800 },
   button: { border: 0, borderRadius: 9, background: "#26231f", color: "white", padding: "10px 13px", fontWeight: 800, cursor: "pointer" },
-  badgeOk: { display: "inline-block", padding: "8px 10px", borderRadius: 999, background: "#e8f5ea", fontSize: 11, fontWeight: 800, color: "#276235", textAlign: "center" },
   success: { maxWidth: 1050, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#e8f5ea", color: "#276235", border: "1px solid #bcdcc3", whiteSpace: "pre-wrap" },
   error: { maxWidth: 1050, margin: "0 auto 14px", padding: 12, borderRadius: 9, background: "#fff2f0", color: "#a33a2b", border: "1px solid #f0c8c1", whiteSpace: "pre-wrap" },
   note: { maxWidth: 1050, margin: "14px auto 0", padding: 14, borderRadius: 10, background: "#efeae3", color: "#5f574e", fontSize: 12, lineHeight: 1.5 },
