@@ -225,12 +225,16 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  // Read-only until server-side administrator authentication and a verifiable
-  // Mirakl import/visibility reconciliation are implemented.
-  return NextResponse.json(
-    { error: "Migration suspendue : validation administrateur et contrôle de visibilité requis." },
-    { status: 423 }
-  );
+  // Require a private server-side operator credential for every write.
+  // No token is bundled in browser code. A missing credential disables writes.
+  const adminToken = process.env.POURDEBON_ADMIN_WRITE_TOKEN;
+  const supplied = request.headers.get("authorization");
+  if (!adminToken || supplied !== `Bearer ${adminToken}`) {
+    return NextResponse.json(
+      { error: "Écriture verrouillée : autorisation administrateur requise." },
+      { status: 403 }
+    );
+  }
 
   try {
     const body = await request.json().catch(() => null) as { oldSku?: string; newSku?: string; action?: string } | null;
