@@ -52,6 +52,14 @@ function hasActivePromotion(offer: MiraklOffer) {
 }
 
 export async function POST(request: NextRequest) {
+  // Fail closed: endpoint has no authenticated admin session yet.
+  // Client-provided explicitSelection is not authentication.
+  // Do not expose a write route until server-side identity, CSRF protection,
+  // complete multi-channel price preservation and import tracking are implemented.
+  return NextResponse.json(
+    { error: "Mises à jour désactivées : accès administrateur et validation Mirakl requis." },
+    { status: 423 }
+  );
   const apiKey = process.env.POURDEBON_API_KEY;
   const baseUrl = process.env.POURDEBON_BASE_URL;
 
