@@ -52,14 +52,16 @@ function hasActivePromotion(offer: MiraklOffer) {
 }
 
 export async function POST(request: NextRequest) {
-  // Fail closed: endpoint has no authenticated admin session yet.
-  // Client-provided explicitSelection is not authentication.
-  // Do not expose a write route until server-side identity, CSRF protection,
-  // complete multi-channel price preservation and import tracking are implemented.
-  return NextResponse.json(
-    { error: "Mises à jour désactivées : accès administrateur et validation Mirakl requis." },
-    { status: 423 }
-  );
+  // Require a private server-side operator credential for every write.
+  // No token is bundled in browser code. A missing credential disables writes.
+  const adminToken = process.env.POURDEBON_ADMIN_WRITE_TOKEN;
+  const supplied = request.headers.get("authorization");
+  if (!adminToken || supplied !== `Bearer ${adminToken}`) {
+    return NextResponse.json(
+      { error: "Écriture verrouillée : autorisation administrateur requise." },
+      { status: 403 }
+    );
+  }
   const apiKey = process.env.POURDEBON_API_KEY;
   const baseUrl = process.env.POURDEBON_BASE_URL;
 
