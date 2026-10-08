@@ -182,15 +182,27 @@ export default function Home() {
     setLoading(true);
     setError("");
     try {
-      const [offersResponse, shopResponse] = await Promise.all([
-        fetch("/api/pourdebon/offers?max=100&offset=0", { cache: "no-store" }),
-        fetch("/api/shop/products", { cache: "no-store" }),
-      ]);
-      const offersData = (await offersResponse.json()) as OffersResponse;
+      const shopResponsePromise = fetch("/api/shop/products", { cache: "no-store" });
+      const allOffers: Offer[] = [];
+      const pageSize = 100;
+      let offset = 0;
+      let totalCount: number | null = null;
+      // Do not silently truncate the Mirakl catalog at its first 100 offers.
+      for (let page = 0; page < 100; page += 1) {
+        const response = await fetch(`/api/pourdebon/offers?max=${pageSize}&offset=${offset}`, { cache: "no-store" });
+        const data = (await response.json()) as OffersResponse & { total_count?: number };
+        if (!response.ok) throw new Error(data.error || `Impossible de charger les offres Pourdebon (offset ${offset})`);
+        if (!Array.isArray(data.offers)) throw new Error("Réponse Pourdebon invalide : liste d'offres absente");
+        allOffers.push(...data.offers);
+        if (typeof data.total_count === "number" && Number.isFinite(data.total_count)) totalCount = data.total_count;
+        offset += data.offers.length;
+        if (data.offers.length === 0 || (totalCount !== null && offset >= totalCount) || data.offers.length < pageSize) break;
+        if (page === 99) throw new Error("Pagination Pourdebon incomplète : limite de sécurité atteinte");
+      }
+      const shopResponse = await shopResponsePromise;
       const shopData = (await shopResponse.json()) as ShopResponse;
-      if (!offersResponse.ok) throw new Error(offersData.error || "Impossible de charger les offres Pourdebon");
       if (!shopResponse.ok) throw new Error(shopData.error || "Impossible de charger les prix boutique");
-      setOffers(Array.isArray(offersData.offers) ? offersData.offers : []);
+      setOffers(allOffers);
       setShopProducts(Array.isArray(shopData.products) ? shopData.products : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur inconnue");
