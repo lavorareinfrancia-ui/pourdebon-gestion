@@ -225,6 +225,13 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  // Read-only until server-side administrator authentication and a verifiable
+  // Mirakl import/visibility reconciliation are implemented.
+  return NextResponse.json(
+    { error: "Migration suspendue : validation administrateur et contrôle de visibilité requis." },
+    { status: 423 }
+  );
+
   try {
     const body = await request.json().catch(() => null) as { oldSku?: string; newSku?: string; action?: string } | null;
     const oldSku = String(body?.oldSku ?? "").trim();
