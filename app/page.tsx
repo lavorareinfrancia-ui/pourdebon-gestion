@@ -284,6 +284,7 @@ export default function Home() {
         <div>
           <p style={styles.eyebrow}>Pasta Piemonte · Pourdebon</p>
           <h1 style={styles.title}>Audit des prix frais</h1>
+          <p><a href="/controle" style={{color:"#285b40",fontWeight:700}}>Ouvrir le centre de contrôle simplifié →</a></p>
           <p style={styles.subtitle}>Citron et références PRO exclus. Chaque valeur indique clairement si elle est TTC ou HT, par confezione ou par kg.</p>
         </div>
         <button onClick={loadData} disabled={loading || updatingSku !== null} style={styles.secondaryButton}>{loading ? "Actualisation…" : "Actualiser"}</button>
